@@ -3,6 +3,8 @@ module RLTDuals
 using JuMP, LinearAlgebra, Parameters, Gurobi
 const MOI = JuMP.MOI
 using ..RLTBigM: prepare_instance 
+using Dates
+
 
 # --- helpers for empty JuMP arrays ---
 const VR = JuMP.VariableRef
@@ -134,8 +136,7 @@ function add_Cx!(model, params, M, multipliers; variant)
         Cx .+= -ρ * multipliers[:ϕ]
     end
     if variant in ["EU","IU"]
-        U = multipliers
-        Cx .+= -A' * (U[:Ω] * e) + (U[:Πp] - U[:Πm]) * e
+        Cx .+= A' * (multipliers[:Ω] * e) + (multipliers[:Πp] - multipliers[:Πm]) * e
     end
     if variant in ["I","IU"]
         Ivars = multipliers
@@ -158,7 +159,7 @@ function add_CX!(model, params, multipliers)
         CX .+= A' * Θ * A + A' * (ΓAU-ΓAL) + (ΓAU'-ΓAL')*A
     end
     if η > 0
-        CX .+= H' * Φ - Φ' * H
+        CX .+= -H' * Φ - Φ' * H
     end
     @constraint(model, CX .== Q0)
 end
@@ -178,8 +179,7 @@ function add_Cu!(model, params, M, multipliers; variant)
         Cu .+= -ρ * multipliers[:ψ]
     end
     if variant in ["EU","IU"]
-        U = multipliers
-        Cu .+= U[:κ] + U[:Ω]'*b - Mmat*(U[:Πp] + U[:Πm])*e + U[:Λ]*e
+        Cu .+= multipliers[:κ] + multipliers[:Ω]'*b - Mmat*(multipliers[:Πp] + multipliers[:Πm])*e + multipliers[:Λ]*e
     end
     if variant in ["I","IU"]
         Ivars = multipliers
@@ -210,8 +210,7 @@ function add_CR!(model, params, M, multipliers; variant)
         CR .+= multipliers[:ϕ]*e'
     end
     if variant in ["EU","IU"]
-        U = multipliers
-        CR .+= -A'*U[:Ω] - U[:Πp] + U[:Πm]
+        CR .+= -A'*multipliers[:Ω] - multipliers[:Πp] + multipliers[:Πm]
     end
     if variant in ["I","IU"]
         Ivars = multipliers
@@ -232,8 +231,7 @@ function add_CU!(model, params, M, multipliers; variant)
         CU .+= 0.5*(multipliers[:ψ]*e' + e*multipliers[:ψ]')
     end
     if variant in ["EU","IU"]
-        U = multipliers
-        CU .+= -0.5*U[:Λ] + 0.5*(Mmat*(U[:Πp]+U[:Πm]) + (U[:Πp]'+U[:Πm]')*Mmat)
+        CU .+= -0.5*multipliers[:Λ] + 0.5*(Mmat*(multipliers[:Πp]+multipliers[:Πm]) + (multipliers[:Πp]'+ multipliers[:Πm]')*Mmat)
     end
     if variant in ["I","IU"]
         Ivars = multipliers
@@ -298,12 +296,35 @@ function build_dual(data::Dict; variant="E", solve=false, verbose=false)
     if solve
         optimize!(model)
         term = termination_status(model)
-        if term==MOI.OPTIMAL
+        if term == MOI.OPTIMAL
             println("dual($variant) obj=", objective_value(model))
+
+            # --- dump multipliers to a plain txt file ---
+            begin
+                ts = Dates.format(now(), "yyyymmdd_HHMMSS")
+                fname = "dual_$(variant)_$(ts).txt"
+                open(fname, "w") do io
+                    for (name, var) in pairs(multipliers)
+                        try
+                            if var isa JuMP.VariableRef
+                                println(io, string(name), " = ", value(var))
+                            else
+                                println(io, string(name), " = ", value.(var))
+                            end
+                        catch
+                            println(io, string(name), " = (no value)")
+                        end
+                    end
+                end
+                println("saved dual multipliers to $fname")
+            end
+            # -------------------------------------------
+
         else
-            println("dual($variant) status=",term)
+            println("dual($variant) status=", term)
         end
     end
+
     return model
 end
 
@@ -319,7 +340,7 @@ function demo_duals()
         "M"=>I(4))
 
     
-    q0_opt =[-1.,0,0,0]
+    q0_opt = [-10.0, 10.0, -10.0, -10.0]
     data = Dict(
     "n"=>4, "rho"=>3.0,
     "Q0"=>zeros(4,4),
@@ -330,9 +351,126 @@ function demo_duals()
     "H"=>nothing,"h"=>nothing,
     "M"=>I(4)
     )
+
+    n   = 4
+    ρ   = 3.0
+    ℓ   = [-1.0, -0.5, -2.0, -0.3]   # lower bounds
+    ū   = [ 1.0,  0.8,  0.7,  2.5]   # upper bounds
+    Mvec = max.(abs.(ℓ), abs.(ū))    # Big-M not tighter than box
+    Mmat = Diagonal(Mvec)
+
+    A = [I(n); -I(n)]
+    b = vcat(ū, -ℓ)
+    H = nothing
+    h = nothing
+    
+    data3 = Dict(
+        "n"  => n,
+        "rho"=> ρ,
+        "Q0" => zeros(n,n),
+        "q0" => [-100.0, 0.0, 100.0, -100.0],   
+        "Qi" => nothing, "qi"=>nothing, "ri"=>nothing,
+        "Pi" => nothing, "pi"=>nothing, "si"=>nothing,
+        "A"  => A, "b"=> b,
+        "H"  => H, "h"=> h,
+        "M"  => Mmat
+    )
+
+    H = [ 1.0  -2.0   0.0   0.0;
+      0.0   0.0   1.0   1.0 ]
+    h = [0.0, 0.0]
+
+    dataA = Dict(
+        "n"  => n, "rho"=> ρ,
+        "Q0" => zeros(n,n),
+        "q0" => [-29.0, 43.0, -30.0, 70.0],   # same pattern you used
+        "Qi" => nothing, "qi"=>nothing, "ri"=>nothing,
+        "Pi" => nothing, "pi"=>nothing, "si"=>nothing,
+        "A"  => A, "b"=>b,
+        "H"  => H, "h"=>h,
+        "M"  => Mmat
+    )
+
+    Q1 = diagm(0 => [2.0, 2.0, 0.0, 0.0])     # 0.5*Q1 gives x1^2 + x2^2
+    q1 = [-0.6, 0.4, 0.0, 0.0]
+    r1 = -0.87
+
+    dataB = Dict(
+        "n"  => n, "rho"=> ρ,
+        "Q0" => zeros(n,n),
+        "q0" => [-12.0, 8.0, 5.0, -3.0],      # arbitrary but bounded
+        "Qi" => (Q1,), "qi" => (q1,), "ri" => (r1,),
+        "Pi" => nothing, "pi"=>nothing, "si"=>nothing,
+        "A"  => A, "b"=>b,
+        "H"  => nothing, "h"=>nothing,
+        "M"  => Mmat
+    )
+
+    P1 = diagm(0 => [0.0, 0.0, 2.0, 2.0])   # 0.5*P1 gives x3^2 + x4^2
+    p1 = zeros(n)
+    s1 = -2.25
+
+    dataC = Dict(
+        "n"  => n, "rho"=> ρ,
+        "Q0" => zeros(n,n),
+        "q0" => [5.0, -4.0, 1.0, 2.0],
+        "Qi" => nothing, "qi"=>nothing, "ri"=>nothing,
+        "Pi" => (P1,), "pi" => (p1,), "si" => (s1,),
+        "A"  => A, "b"=>b,
+        "H"  => [1.0 -2.0 0.0 0.0], "h" => [0.0],  # optional equality as in A
+        "M"  => Mmat
+    )
+
+    # Inequality 1: (x1 - x2)^2 ≤ 0.5
+    Q2 = zeros(n,n);  Q2[1,1]=2.0; Q2[2,2]=2.0; Q2[1,2]=-2.0; Q2[2,1]=-2.0
+    q2 = zeros(n)
+    r2 = -0.5
+
+    # Inequality 2: reuse the ball from dataB
+    Q3 = Q1;  q3 = q1;  r3 = r1
+
+    # Equality: reuse the circle from dataC
+    P2 = P1;  p2 = p1;  s2 = s1
+
+    H2 = [ 1.0  -1.0   0.0   0.0 ]   # x1 - x2 = 0
+    h2 = [ 0.0 ]
+
+    dataD = Dict(
+        "n"  => n, "rho"=> ρ,
+        "Q0" => zeros(n,n),
+        "q0" => [-29.0, 43.0, -30.0, 70.0],
+        "Qi" => (Q2, Q3), "qi" => (q2, q3), "ri" => (r2, r3),
+        "Pi" => (P2,),    "pi" => (p2,),    "si" => (s2,),
+        "A"  => A, "b"=>b,
+        "H"  => H2, "h"=>h2,
+        "M"  => Mmat
+    )
+
+       Q0 = [
+    0.0003   0.1016   0.0316   0.0867;
+    0.1016   0.0020   0.1001   0.1059;
+    0.0316   0.1001  -0.0005  -0.0703;
+    0.0867   0.1059  -0.0703  -0.1063
+    ]
+
+    q0 = [-0.1973, -0.2535, -0.1967, -0.0973]
+
+
+    data_test = Dict(
+    "n"  => 4,
+    "rho"=> 3.0,
+    "Q0" => Q0,
+    "q0" => q0,
+    "Qi" => nothing, "qi" => nothing, "ri" => nothing,
+    "Pi" => nothing, "pi" => nothing, "si" => nothing,
+    "A"  => nothing, "b"  => nothing,
+    "H"  => nothing, "h"  => nothing,
+    "M"  => I(4)
+    )
+
     for v in ["E","EU","I","IU"]
-        build_dual(data;variant=v,solve=true)
+        build_dual(data_test;variant=v,solve=true)
     end
 end
-#demo_duals()
+demo_duals()
 end # module

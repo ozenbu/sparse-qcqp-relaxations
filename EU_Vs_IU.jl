@@ -3,7 +3,6 @@ using Parameters
 using JuMP
 using Gurobi
 using MathOptInterface
-const MOI = MathOptInterface
 
 include("RLT_bigM_4variants.jl")      # primal RLTs
 include("RLT_duals_bigM_4variants.jl")# dual RLTs
@@ -80,7 +79,31 @@ data = Dict(
     "M"=>I(4)
 )
 
-model, q0_var = build_gap_model(data; qmax=10)
+n   = 4
+ρ   = 3.0
+ℓ   = [-1.0, -0.5, -2.0, -0.3]   # lower bounds
+ū   = [ 1.0,  0.8,  0.7,  2.5]   # upper bounds
+Mvec = max.(abs.(ℓ), abs.(ū))    # Big-M not tighter than box
+Mmat = Diagonal(Mvec)
+
+A = [I(n); -I(n)]
+b = vcat(ū, -ℓ)
+H = nothing
+h = nothing
+
+data3 = Dict(
+    "n"  => n,
+    "rho"=> ρ,
+    "Q0" => zeros(n,n),
+    "Qi" => nothing, "qi"=>nothing, "ri"=>nothing,
+    "Pi" => nothing, "pi"=>nothing, "si"=>nothing,
+    "A"  => A, "b"=> b,
+    "H"  => H, "h"=> h,
+    "M"  => Mmat
+)
+
+
+model, q0_var = build_gap_model(data3; qmax=100)
 # Write to LP for inspection
 write_to_file(model, "gap_model.lp")
 optimize!(model)

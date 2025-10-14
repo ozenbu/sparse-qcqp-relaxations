@@ -1,5 +1,3 @@
-@info "RLTBigM loaded from" @__FILE__
-
 module RLTBigM
 println(">>> Script loaded")
 
@@ -8,7 +6,7 @@ using Parameters
 using JuMP
 using Gurobi
 using MathOptInterface
-using Dates, Printf
+using Printf
 const MOI = MathOptInterface
 
 # ---------- helpers ----------
@@ -228,7 +226,10 @@ function build_and_solve(data; variant::String="EXACT", build_only::Bool=false, 
         @variable(m, U[1:n,1:n], Symmetric)
 
         # RLT objective
-        @objective(m, Min, 0.5 * sum(Q0[i,j]*X[i,j] for i=1:n, j=1:n) + q0' * x)
+        @objective(m, Min,sum(u))
+        #@objective(m, Min, 0.5 * sum(Q0[i,j]*X[i,j] for i=1:n, j=1:n) + q0' * x)
+
+        @constraint(m, 0.5 * sum(Q0[i,j]*X[i,j] for i=1:n, j=1:n) + q0' * x == -225.0 )
 
         # Common lifted/RLT block
         add_FC!(m, x, u, X, R, U, params)
@@ -252,45 +253,11 @@ function build_and_solve(data; variant::String="EXACT", build_only::Bool=false, 
             return m
         end
 
-
         optimize!(m)
         term = termination_status(m)
 
         if term == MOI.OPTIMAL
-            #  dump primal to txt: x, u, X, R, U 
-            begin
-                ts = Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
-                fname = "primal_sol_$(variant)_$(ts).txt"
-                open(fname, "w") do io
-                    println(io, "# variant=", variant, "  status=OPTIMAL  obj=", objective_value(m))
-                    println(io, "x = ", value.(x))
-                    println(io, "u = ", value.(u))
-                    print(io,   "X = "); show(io, "text/plain", value.(X)); println(io)
-                    print(io,   "R = "); show(io, "text/plain", value.(R)); println(io)
-                    print(io,   "U = "); show(io, "text/plain", value.(U)); println(io)
-                end
-                println("saved primal solution to $fname")
-            end
-            # dump dual to txt
-            if JuMP.has_duals(m)
-                ts    = Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
-                fname = "primal_duals_$(variant)_$(ts).txt"
-                open(fname, "w") do io
-                    @printf(io, "# variant=%s  status=%s  obj=%.12g\n\n",
-                            variant, string(term), objective_value(m))
-                    for con in JuMP.all_constraints(m; include_variable_in_set_constraints=true)
-                        try
-                            d = dual(con)
-                            println(io, string(con), " = ", @sprintf("%.9g", d))
-                        catch
-                            # dual raporlanmayan kısıt/solver olursa atla
-                        end
-                    end
-                end
-                println("saved primal-side dual multipliers to $fname")
-            end
             return (:OPTIMAL, objective_value(m), value.(x), value.(u), value.(X), value.(R), value.(U))
-
         elseif term == MOI.DUAL_INFEASIBLE
             return (:UNBOUNDED, nothing, nothing, nothing, nothing, nothing, nothing)
         elseif term == MOI.INFEASIBLE_OR_UNBOUNDED
@@ -300,7 +267,6 @@ function build_and_solve(data; variant::String="EXACT", build_only::Bool=false, 
         else
             return (:OTHER, term, nothing, nothing, nothing, nothing, nothing)
         end
-
     end
 end
 
@@ -370,82 +336,10 @@ function demo()
       0.0   0.0   1.0   1.0 ]
     h = [0.0, 0.0]
 
-    dataA = Dict(
-        "n"  => n, "rho"=> ρ,
-        "Q0" => zeros(n,n),
-        "q0" => [-29.0, 43.0, -30.0, 70.0],   # same pattern you used
-        "Qi" => nothing, "qi"=>nothing, "ri"=>nothing,
-        "Pi" => nothing, "pi"=>nothing, "si"=>nothing,
-        "A"  => A, "b"=>b,
-        "H"  => H, "h"=>h,
-        "M"  => Mmat
-    )
-
-    Q1 = diagm(0 => [2.0, 2.0, 0.0, 0.0])     # 0.5*Q1 gives x1^2 + x2^2
-    q1 = [-0.6, 0.4, 0.0, 0.0]
-    r1 = -0.87
-
-    dataB = Dict(
-        "n"  => n, "rho"=> ρ,
-        "Q0" => zeros(n,n),
-        "q0" => [-12.0, 8.0, 5.0, -3.0],      # arbitrary but bounded
-        "Qi" => (Q1,), "qi" => (q1,), "ri" => (r1,),
-        "Pi" => nothing, "pi"=>nothing, "si"=>nothing,
-        "A"  => A, "b"=>b,
-        "H"  => nothing, "h"=>nothing,
-        "M"  => Mmat
-    )
-
-    P1 = diagm(0 => [0.0, 0.0, 2.0, 2.0])   # 0.5*P1 gives x3^2 + x4^2
-    p1 = zeros(n)
-    s1 = -2.25
-
-    dataC = Dict(
-        "n"  => n, "rho"=> ρ,
-        "Q0" => zeros(n,n),
-        "q0" => [5.0, -4.0, 1.0, 2.0],
-        "Qi" => nothing, "qi"=>nothing, "ri"=>nothing,
-        "Pi" => (P1,), "pi" => (p1,), "si" => (s1,),
-        "A"  => A, "b"=>b,
-        "H"  => [1.0 -2.0 0.0 0.0], "h" => [0.0],  # optional equality as in A
-        "M"  => Mmat
-    )
-
-    # Inequality 1: (x1 - x2)^2 ≤ 0.5
-    Q2 = zeros(n,n);  Q2[1,1]=2.0; Q2[2,2]=2.0; Q2[1,2]=-2.0; Q2[2,1]=-2.0
-    q2 = zeros(n)
-    r2 = -0.5
-
-    # Inequality 2: reuse the ball from dataB
-    Q3 = Q1;  q3 = q1;  r3 = r1
-
-    # Equality: reuse the circle from dataC
-    P2 = P1;  p2 = p1;  s2 = s1
-
-    H2 = [ 1.0  -1.0   0.0   0.0 ]   # x1 - x2 = 0
-    h2 = [ 0.0 ]
-
-    dataD = Dict(
-        "n"  => n, "rho"=> ρ,
-        "Q0" => zeros(n,n),
-        "q0" => [-29.0, 43.0, -30.0, 70.0],
-        "Qi" => (Q2, Q3), "qi" => (q2, q3), "ri" => (r2, r3),
-        "Pi" => (P2,),    "pi" => (p2,),    "si" => (s2,),
-        "A"  => A, "b"=>b,
-        "H"  => H2, "h"=>h2,
-        "M"  => Mmat
-    )
-
-    Q0 = [
-    0.0003   0.1016   0.0316   0.0867;
-    0.1016   0.0020   0.1001   0.1059;
-    0.0316   0.1001  -0.0005  -0.0703;
-    0.0867   0.1059  -0.0703  -0.1063
-    ]
-
-    q0 = [-0.1973, -0.2535, -0.1967, -0.0973]
 
 
+    Q0 = [0.0 0.0 0.0 100.0; 0.0 0.0 0.0 100.0; 0.0 0.0 -100.0 -100.0; 100.0 100.0 -100.0 -100.0]
+    q0 = [-100.0, -100.0, -100.0, -75.0]
     data_test = Dict(
     "n"  => 4,
     "rho"=> 3.0,
@@ -484,13 +378,9 @@ function demo()
         end
     end
 
-    inspect_model(data_test,"IU")
-end
+    
 
+    #inspect_model(data,"IU")
+end
+demo()
 end # module
-
-
-if isinteractive() 
-    using .RLTBigM
-    RLTBigM.demo()
-end
