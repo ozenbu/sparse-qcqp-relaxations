@@ -1,39 +1,201 @@
 module RLT_SDP_Combo
+
 using MosekTools
 using JuMP, LinearAlgebra, Parameters
 const MOI = JuMP.MOI
 
-
-# Bring in the building blocks
 using ..RLTBigM: prepare_instance, add_FC!, add_FE!, add_FI!, add_FU!, add_FIU!
 using ..SDPBigM: add_SDP_lift!
 
+
+const RelaxationModes = (
+    :RLT,
+
+    :RLT_SOC2x2_diag_X,
+    :RLT_SOC2x2_diag_U,
+    :RLT_SOC2x2_diag_XU,
+
+    :RLT_SOC2x2_full_X,
+    :RLT_SOC2x2_full_U,
+    :RLT_SOC2x2_full_XU,
+
+    :RLT_SOC3x3_X,
+    :RLT_SOC3x3_U,
+    :RLT_SOC3x3_XU,
+
+    :RLT_PSD3x3_X,
+    :RLT_PSD3x3_U,
+    :RLT_PSD3x3_XU,
+
+    :RLT_blockSDP_X,
+    :RLT_blockSDP_U,
+    :RLT_blockSDP_XU,
+
+    :RLT_full_SDP,   # stays as single mode
+)
+
+
+all_pairs(n::Int) = [(i,j) for i in 1:n for j in i+1:n]
+
+# ------------------------------------------------------------------
+# 1) diagonal 2×2 SOC: Xii ≥ xi², Ujj ≥ uj²
+#   [Xii, 0.5, xi] ∈ RSOC, [Ujj, 0.5, uj] ∈ RSOC
+# ------------------------------------------------------------------
+function add_SOC2x2_diag_X!(model::Model, x, X)
+    n = length(x)
+    for i in 1:n
+        @constraint(model, [X[i,i], 0.5, x[i]] in MOI.RotatedSecondOrderCone(3))
+    end
+    return nothing
+end
+
+function add_SOC2x2_diag_U!(model::Model, u, U)
+    n = length(u)
+    for j in 1:n
+        @constraint(model, [U[j,j], 0.5, u[j]] in MOI.RotatedSecondOrderCone(3))
+    end
+    return nothing
+end
+
+add_SOC2x2_diag_XU!(m, x, X, u, U) = (add_SOC2x2_diag_X!(m, x, X);
+                                      add_SOC2x2_diag_U!(m, u, U))
+
+# ------------------------------------------------------------------
+# 2) full 2×2 SOC: diag + all 2×2 minors
+#    Xii Xjj ≥ Xij²  via RSOC; same for U
+# ------------------------------------------------------------------
+function add_SOC2x2_full_X!(model::Model, x, X)
+    n = length(x)
+    add_SOC2x2_diag_X!(model, x, X)
+    for i in 1:n, j in i+1:n
+        @constraint(model, [X[i,i], X[j,j], sqrt(2.0) * X[i,j]] in MOI.RotatedSecondOrderCone(3))
+    end
+    return nothing
+end
+
+function add_SOC2x2_full_U!(model::Model, u, U)
+    n = length(u)
+    add_SOC2x2_diag_U!(model, u, U)
+    for i in 1:n, j in i+1:n
+        @constraint(model, [U[i,i], U[j,j], sqrt(2.0) * U[i,j]] in MOI.RotatedSecondOrderCone(3))
+    end
+    return nothing
+end
+
+add_SOC2x2_full_XU!(m, x, X, u, U) = (add_SOC2x2_full_X!(m, x, X);
+                                      add_SOC2x2_full_U!(m, u, U))
+
+# ------------------------------------------------------------------
+# 3) SOC3×3: (Xii−xi²)(Xjj−xj²) ≥ (Xij−xixj)²  (and same for U,u)
+#    Encode with RSOC on Schur complement pieces.
+# ------------------------------------------------------------------
+function add_SOC3x3_X!(model::Model, x, X)
+    n = length(x)
+    for i in 1:n, j in i+1:n
+        @constraint(model,
+            [X[i,i] - x[i]^2,
+             X[j,j] - x[j]^2,
+             sqrt(2.0) * (X[i,j] - x[i]*x[j])] in MOI.RotatedSecondOrderCone(3)
+        )
+    end
+    return nothing
+end
+
+function add_SOC3x3_U!(model::Model, u, U)
+    n = length(u)
+    for i in 1:n, j in i+1:n
+        @constraint(model,
+            [U[i,i] - u[i]^2,
+             U[j,j] - u[j]^2,
+             sqrt(2.0) * (U[i,j] - u[i]*u[j])] in MOI.RotatedSecondOrderCone(3)
+        )
+    end
+    return nothing
+end
+
+add_SOC3x3_XU!(m, x, X, u, U) = (add_SOC3x3_X!(m, x, X);
+                                 add_SOC3x3_U!(m, u, U))
+
+# ------------------------------------------------------------------
+# 4) PSD 3×3 principals of [1 x'; x X] and [1 u'; u U]
+# ------------------------------------------------------------------
+function add_PSD3x3_X!(model::Model, x, X)
+    n = length(x)
+    for (i,j) in all_pairs(n)
+        @constraint(model, Symmetric([
+            1.0     x[i]         x[j];
+            x[i]    X[i,i]       X[i,j];
+            x[j]    X[i,j]       X[j,j]
+        ]) in PSDCone())
+    end
+    return nothing
+end
+
+function add_PSD3x3_U!(model::Model, u, U)
+    n = length(u)
+    for (i,j) in all_pairs(n)
+        @constraint(model, Symmetric([
+            1.0     u[i]         u[j];
+            u[i]    U[i,i]       U[i,j];
+            u[j]    U[i,j]       U[j,j]
+        ]) in PSDCone())
+    end
+    return nothing
+end
+
+add_PSD3x3_XU!(m, x, X, u, U) = (add_PSD3x3_X!(m, x, X);
+                                 add_PSD3x3_U!(m, u, U))
+
+# ------------------------------------------------------------------
+# 5) block SDP constraints: [1  x'; x  X]  and  [1  u'; u  U]
+# ------------------------------------------------------------------
+function add_blockSDP_X!(model::Model, x, X)
+    @constraint(model,
+        Symmetric([ 1.0   x';
+                    x     X ]) in PSDCone())
+    return nothing
+end
+
+function add_blockSDP_U!(model::Model, u, U)
+    @constraint(model,
+        Symmetric([ 1.0   u';
+                    u     U ]) in PSDCone())
+    return nothing
+end
+
+add_blockSDP_XU!(m, x, X, u, U) = (add_blockSDP_X!(m, x, X);
+                                   add_blockSDP_U!(m, u, U))
+
+# ------------------------------------------------------------------
+# Build and solve
+# ------------------------------------------------------------------
 function build_RLT_SDP_model(
     data::Dict{String,Any};
     variant::String = "EU",
-    optimizer=MosekTools.Optimizer,
-    build_only::Bool = false
+    optimizer = MosekTools.Optimizer,
+    build_only::Bool = false,
+    relaxation::Symbol = :RLT,
 )
-    # Unpack instance
+    @assert relaxation in RelaxationModes "Unknown relaxation mode: $relaxation"
+
     params = prepare_instance(data)
     @unpack n, ρ, Q0, q0, Qi, qi, ri, Pi, pi, si, A, b, ℓ, H, h, η, M, e = params
 
     m = Model(optimizer)
 
-    # Decision variables
     @variable(m, x[1:n])
     @variable(m, u[1:n])
     @variable(m, X[1:n,1:n], Symmetric)
     @variable(m, R[1:n,1:n])
     @variable(m, U[1:n,1:n], Symmetric)
 
-    # Objective: 0.5*⟨Q0,X⟩ + q0ᵀx
-    @objective(m, Min, 0.5 * sum(Q0[i,j]*X[i,j] for i=1:n, j=1:n) + sum(q0[i]*x[i] for i=1:n))
+    @objective(m, Min,
+        0.5 * sum(Q0[i,j]*X[i,j] for i=1:n, j=1:n) +
+        sum(q0[i]*x[i] for i=1:n)
+    )
 
-    # Core RLT block
     add_FC!(m, x, u, X, R, U, params)
 
-    # E vs I
     if startswith(variant, "E")
         add_FE!(m, x, u, X, R, U, params)
     elseif startswith(variant, "I")
@@ -42,7 +204,6 @@ function build_RLT_SDP_model(
         error("Unknown variant: $variant (expected prefix 'E' or 'I')")
     end
 
-    # U extras (+ I×U coupling for IU)
     if endswith(variant, "U")
         add_FU!(m, x, u, X, R, U, params)
         if startswith(variant, "I")
@@ -50,68 +211,88 @@ function build_RLT_SDP_model(
         end
     end
 
-    # SDP lifting block (does not add original constraints; only PSD-Z and link equalities)
-    add_SDP_lift!(m, x, u, X, R, U; n=n)
+    if relaxation == :RLT
+       # pure RLT, no extra lift
+       
+    # ---- SOC 2x2 diag ----
+    elseif relaxation == :RLT_SOC2x2_diag_X
+        add_SOC2x2_diag_X!(m, x, X)
+    elseif relaxation == :RLT_SOC2x2_diag_U
+        add_SOC2x2_diag_U!(m, u, U)
+    elseif relaxation == :RLT_SOC2x2_diag_XU
+        add_SOC2x2_diag_XU!(m, x, X, u, U)
 
-    if build_only
-            return m
+    # ---- SOC 2x2 full ----
+    elseif relaxation == :RLT_SOC2x2_full_X
+        add_SOC2x2_full_X!(m, x, X)
+    elseif relaxation == :RLT_SOC2x2_full_U
+        add_SOC2x2_full_U!(m, u, U)
+    elseif relaxation == :RLT_SOC2x2_full_XU
+        add_SOC2x2_full_XU!(m, x, X, u, U)
+
+    # ---- SOC 3x3 ----
+    elseif relaxation == :RLT_SOC3x3_X
+        add_SOC3x3_X!(m, x, X)
+    elseif relaxation == :RLT_SOC3x3_U
+        add_SOC3x3_U!(m, u, U)
+    elseif relaxation == :RLT_SOC3x3_XU
+        add_SOC3x3_XU!(m, x, X, u, U)
+
+    # ---- PSD 3x3 ----
+    elseif relaxation == :RLT_PSD3x3_X
+        add_PSD3x3_X!(m, x, X)
+    elseif relaxation == :RLT_PSD3x3_U
+        add_PSD3x3_U!(m, u, U)
+    elseif relaxation == :RLT_PSD3x3_XU
+        add_PSD3x3_XU!(m, x, X, u, U)
+
+    # ---- block SDP ----
+    elseif relaxation == :RLT_blockSDP_X
+        add_blockSDP_X!(m, x, X)
+    elseif relaxation == :RLT_blockSDP_U
+        add_blockSDP_U!(m, u, U)
+    elseif relaxation == :RLT_blockSDP_XU
+        add_blockSDP_XU!(m, x, X, u, U)
+
+    # ---- full SDP (single big block, both x and u together) ----
+    elseif relaxation == :RLT_full_SDP
+        add_SDP_lift!(m, x, u, X, R, U; n = n)
+
+    else
+        error("Unhandled relaxation mode: $relaxation")
     end
 
+    if build_only
+        return m
+    end
+
+    t0 = time_ns()
     optimize!(m)
-    return m
+    solve_time_sec = round((time_ns() - t0) / 1e9; digits = 4)
+
+    return m, solve_time_sec
 end
 
-"""
-    solve_RLT_SDP(data; variant="EU", optimizer)
-
-Helper: builds and solves, returns (status, obj, x, u, X, R, U).
-"""
 function solve_RLT_SDP(
     data::Dict{String,Any};
     variant::String = "EU",
-    optimizer=MosekTools.Optimizer
+    optimizer = MosekTools.Optimizer,
+    relaxation::Symbol = :RLT,
 )
-    m = build_RLT_SDP_model(data; variant=variant, optimizer=optimizer, build_only=false)
+    m, t = build_RLT_SDP_model(data; variant=variant, optimizer=optimizer,
+                               build_only=false, relaxation=relaxation)
     st = termination_status(m)
 
-    if st == MOI.OPTIMAL || st == MOI.LOCALLY_OPTIMAL
-        x = value.(m[:x]); u = value.(m[:u])
-        X = value.(m[:X]); R = value.(m[:R]); U = value.(m[:U])
-        return (st, objective_value(m), x, u, X, R, U)
+    if st == MOI.OPTIMAL || st == MOI.LOCALLY_SOLVED || st == MOI.ALMOST_OPTIMAL
+        x = value.(m[:x])
+        u = value.(m[:u])
+        X = value.(m[:X])
+        R = value.(m[:R])
+        U = value.(m[:U])
+        return (st, objective_value(m), x, u, X, R, U, t)
     else
-        return (st, nothing, nothing, nothing, nothing, nothing, nothing)
-    end
-end
-
-function demo_RLT_SDP_Combo()
-    
-    Q0 = [
-            0.0003   0.1016   0.0316   0.0867;
-            0.1016   0.0020   0.1001   0.1059;
-            0.0316   0.1001  -0.0005  -0.0703;
-            0.0867   0.1059  -0.0703  -0.1063
-        ]
-    q0 = [-0.1973, -0.2535, -0.1967, -0.0973]
-    data = Dict(
-        "n"=>4, "rho"=>3.0,
-        "Q0"=> Q0,
-        "q0"=> q0,
-        "Qi"=>nothing,"qi"=>nothing,"ri"=>nothing,
-        "Pi"=>nothing,"pi"=>nothing,"si"=>nothing,
-        "A"=>nothing,"b"=>nothing,
-        "H"=>nothing,"h"=>nothing,
-        "M"=>I(4)
-    )
-    for v in ("E","EU","I","IU")
-        m = build_RLT_SDP_model(data; variant=v, optimizer=MosekTools.Optimizer)
-        optimize!(m)
-        println("variant=$v → ", termination_status(m), "  obj=", objective_value(m))
+        return (st, nothing, nothing, nothing, nothing, nothing, nothing, t)
     end
 end
 
 end # module
-
-if isinteractive() 
-    using .RLT_SDP_Combo
-    RLT_SDP_Combo.demo_RLT_SDP_Combo()
-end

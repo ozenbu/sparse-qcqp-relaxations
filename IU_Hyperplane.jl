@@ -25,17 +25,15 @@ function find_IU_obj_coef(data::Dict, xhat::AbstractVector, Xhat::AbstractMatrix
     n = params.n
     @assert length(xhat) == n
     @assert size(Xhat) == (n, n)
-
+    e = params.e
     model = Model(optimizer)
     set_silent(model)
     verbose && set_optimizer_attribute(model, "OutputFlag", 1)
-    # Optional tolerances:
-    # set_optimizer_attribute(model, "FeasibilityTol", 1e-8)
-    # set_optimizer_attribute(model, "OptimalityTol", 1e-8)
+
 
     B = coeff_bound
-    @variable(model, -B .<= q0[1:n] .<= B,Int)
-    @variable(model, -B .<= Q0[1:n,1:n] .<= B, Int, Symmetric)
+    @variable(model, -B .<= q0[1:n] .<= B)
+    @variable(model, -B .<= Q0[1:n,1:n] .<= B, Symmetric)
 
     params2 = merge(params, (; q0 = q0, Q0 = Q0))
 
@@ -67,7 +65,8 @@ function find_IU_obj_coef(data::Dict, xhat::AbstractVector, Xhat::AbstractMatrix
 
     @constraint(model, primal_val == dual_obj)
 
-    @objective(model, Min, primal_val^2 + 2*primal_val )
+    @objective(model, Min, primal_val*2 + 2*primal_val)
+    set_optimizer_attribute(model, "NonConvex", 2)
 
     optimize!(model)
     status = termination_status(model)
@@ -78,13 +77,24 @@ function find_IU_obj_coef(data::Dict, xhat::AbstractVector, Xhat::AbstractMatrix
     end
 end
 
+
+A = [ 1.0  0.0  0.0  0.0
+    0.0  1.0  0.0  0.0
+    0.0  0.0  1.0  0.0
+    0.0  0.0  0.0  1.0
+    -1.0  0.0  0.0  0.0
+    0.0 -1.0  0.0  0.0
+    0.0  0.0 -1.0  0.0
+    0.0  0.0  0.0 -1.0 ]
+
+b = [1.0, 1.0, 1.0, 1.0,   1.0, 1.0, 1.0, 1.0]
 data = Dict(
     "n"=>4, "rho"=>3.0,
     "Qi"=>nothing,"qi"=>nothing,"ri"=>nothing,
     "Pi"=>nothing,"pi"=>nothing,"si"=>nothing,
-    "A"=>nothing,"b"=>nothing,
+    "A"=>A,"b"=>b,
     "H"=>nothing,"h"=>nothing,
-    "M"=>I(4)
+    "M"=>2*I(4)
 )
 
 xhat = [0.43401942119225423, 0.5339274947763765, 0.6451099803289744, 0.5252845535748437]
@@ -94,22 +104,33 @@ Xhat = [0.43401942119225423 0.0 0.0791294015212286 0.0;
         0.0 0.05921204835122018 0.5252845535748437 0.5252845535748437]
 
 
+
+
 xhat =[0.5, 0.5, 0.5, 0.0]  
-Xhat =[ 0.5    0.0  0.25  -0.5;
-     0.0    0.5  0.0   -0.5;
-     0.25   0.0  0.5    0.5;
-    -0.5   -0.5  0.5    1.0]
+Xhat = [
+  0.5    0.0  0.25  -0.5;
+  0.0    0.5  0.0   -0.5;
+  0.25   0.0  0.5    0.5;
+ -0.5   -0.5  0.5    1.0]
+
+
+xhat =[0.5, 0.5, 0.5, 0.5]  
+Xhat = [ 0.5  0.5  0.0  0.0
+ 0.5  0.5  0.0  0.0
+ 0.0  0.0  0.5  0.0
+ 0.0  0.0  0.0  0.5]
+
 
 # ---- solve meta-LP for (Q0, q0) ----
 Q0, q0, obj_val, stat = IU_Hyperplane.find_IU_obj_coef(
     data, xhat, Xhat;
-    coeff_bound = 1e2,
+    coeff_bound = 1e1,
     optimizer = Gurobi.Optimizer,
     verbose = false,
 )
 println("Meta-LP status = $stat")
 println("Support value at (x̂, X̂) = $obj_val")
-println("Q0 = $Q0")
-println("q0 = $q0")
+println("Q0 = ", round.(Q0; digits=4))
+println("q0 = ", round.(q0; digits=4))
 
 end # module

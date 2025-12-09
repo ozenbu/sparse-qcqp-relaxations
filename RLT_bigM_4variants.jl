@@ -138,6 +138,9 @@ function add_FI!(m, x, u, X, R, U, params)
     end
     @constraint(m, ρ .* (M*u) .- ρ .* x .- M*U*e .+ R*e .>= 0)
     @constraint(m, ρ .* (M*u) .+ ρ .* x .- M*U*e .- R*e .>= 0)
+
+    #@constraint(m, sum(u) .<= ρ - 1e-2)
+
 end
 
 function add_FU!(m, x, u, X, R, U, params)
@@ -329,19 +332,6 @@ function demo()
         "M"  => I(4)
     )
 
-    q0_found = [-100.0, 0.0, 100.0, -100.0]
-    data2 = Dict(
-    "n"=>4, "rho"=>3.0,
-    "Q0"=>zeros(4,4),
-    "q0"=>q0_found,
-    "Qi"=>nothing,"qi"=>nothing,"ri"=>nothing,
-    "Pi"=>nothing,"pi"=>nothing,"si"=>nothing,
-    "A"=>nothing,"b"=>nothing,
-    "H"=>nothing,"h"=>nothing,
-    "M"=>I(4)
-    )
-
-
     n   = 4
     ρ   = 3.0
     ℓ   = [-1.0, -0.5, -2.0, -0.3]   # lower bounds
@@ -445,21 +435,72 @@ function demo()
 
     q0 = [-0.1973, -0.2535, -0.1967, -0.0973]
 
+    Q0 = [
+        3//10000    127//1250   79//2500    867//10000;
+        127//1250   1//500      1001//10000 1059//10000;
+        79//2500    1001//10000 -1//2000    -703//10000;
+        867//10000  1059//10000 -703//10000 -1063//10000
+    ]
+    Q0d = Q0*20000
 
-    data_test = Dict(
+    # q0 (as rationals)
+    q0 = [-1973//10000, -2535//10000, -1967//10000, -973//10000]
+    q0d = q0*20000
+
+    
+    A = [ 1.0  0.0  0.0  0.0
+        0.0  1.0  0.0  0.0
+        0.0  0.0  1.0  0.0
+        0.0  0.0  0.0  1.0
+        -1.0  0.0  0.0  0.0
+        0.0 -1.0  0.0  0.0
+        0.0  0.0 -1.0  0.0
+        0.0  0.0  0.0 -1.0 ]
+
+    b = [1.0, 1.0, 1.0, 1.0,   1.0, 1.0, 1.0, 1.0]
+    
+    #-1 <= x <= 1
+    #=
+    A = nothing
+    b = nothing
+    =#
+
+    # PSD violating directions
+    Q0t1 = [0.658    0.5482  -0.3641   0.5912
+            0.5482   0.4568  -0.3034   0.4925
+            -0.3641  -0.3034   0.2015  -0.3271
+            0.5912   0.4925  -0.3271   0.5311]
+
+    q0t1=[-0.317
+          -0.2641
+          0.1754
+         -0.2848]
+
+    Q0t2 = [200.0   200.0  -100.0   200.0
+            200.0   200.0  -100.0   200.0
+            -100.0  -100.0    50.0  -100.0
+            200.0   200.0  -100.0   200.0]
+
+    q0t2 = [-200.0
+           -200.0
+           100.0
+           -200.0]
+
+    data_test4 = Dict(
     "n"  => 4,
     "rho"=> 3.0,
-    "Q0" => Q0,
-    "q0" => q0,
+    "Q0" => Q0d,
+    "q0" => q0d,
     "Qi" => nothing, "qi" => nothing, "ri" => nothing,
     "Pi" => nothing, "pi" => nothing, "si" => nothing,
-    "A"  => nothing, "b"  => nothing,
+    "A"  => A, "b"  => b,
     "H"  => nothing, "h"  => nothing,
     "M"  => I(4)
     )
 
+    
     for var in ("EXACT","E","EU","I","IU")
-        res = build_and_solve(data_test; variant=var)
+        res = build_and_solve(data_test4; variant=var)
         println("variant=$var → ", res[1], "  obj=", res[2])
         if res[1] == :OPTIMAL
             if var == "EXACT"
@@ -484,7 +525,7 @@ function demo()
         end
     end
 
-    inspect_model(data_test,"IU")
+    #inspect_model(data_test,"IU")
 end
 
 end # module

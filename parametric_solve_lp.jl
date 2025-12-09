@@ -118,7 +118,7 @@ end
 # ---------------- stationarity blocks ----------------
 function add_Cx!(model, params, M, multipliers; variant)
     @unpack n, ρ, q0, qi, pi, A, b, H, h, e, ℓ, η, m, k = params
-    @unpack α,β,μ,λ,γ,δ,Θ,Φ,ΓAU,ΓAL = multipliers
+    @unpack α,β,μ,λ,γ,δ,Θ,Φ,ΓAU,ΓAL,Ω,Πp,Πm = multipliers
     Cx = @expression(model, q0 + γ - δ)
     for i in 1:m
         Cx .+= α[i]*qi[i]
@@ -136,13 +136,18 @@ function add_Cx!(model, params, M, multipliers; variant)
         Cx .+= -ρ * multipliers[:ϕ]
     end
     if variant in ["EU","IU"]
-        Cx .+= A' * (multipliers[:Ω] * e) + (multipliers[:Πp] - multipliers[:Πm]) * e
+        Cx .+= A' * (Ω * e) + (Πp - Πm) * e
     end
     if variant in ["I","IU"]
         Ivars = multipliers
         Cx .+= ρ*A'*Ivars[:ϖ] + ρ*(Ivars[:χp] - Ivars[:χm])
     end
     @constraint(model, Cx .== 0)
+    #@constraint(model, Πm - Πm' .== 0)
+    #@constraint(model, Πp - Πp' .== 0)
+    #@constraint(model, multipliers[:ϕ] .== 0)
+
+
 end
 
 function add_CX!(model, params, multipliers)
@@ -161,11 +166,19 @@ function add_CX!(model, params, multipliers)
     if η > 0
         CX .+= -H' * Φ - Φ' * H
     end
+
+    Q0p = max.(Q0,0)
+    Q0n = max.(-Q0,0)
+
     @constraint(model, CX .== Q0)
+    @constraint(model, ΓUU + ΓLL - Q0p .== 0)
+    @constraint(model, ΓUL + ΓUL' - Q0n .== 0)
+    @constraint(model, ΓUL - ΓUL'  .== 0)
+
 end
 
 function add_Cu!(model, params, M, multipliers; variant)
-    @unpack n, ρ, A, b, H, h, e, ℓ, η = params
+    @unpack n, q0, ρ, A, b, H, h, e, ℓ, η = params
     @unpack γ,δ,σ,τ,ΓAU,ΓAL,Ξ = multipliers
     Mmat = Matrix(M)
     Cu = @expression(model, -Mmat*(γ+δ) + σ*e - τ)
@@ -192,7 +205,18 @@ function add_Cu!(model, params, M, multipliers; variant)
         ι = multipliers[:ι]
         Cu .+= ρ*ι + (sum(ι))*e
     end
+    q0p= max.(q0,0)
+    q0n= max.(-q0,0)
+
     @constraint(model, Cu .== 0)
+    #@constraint(model, τ .== 0)
+    #@constraint(model,  γ - q0n.== 0)
+    #@constraint(model, δ .== 0)
+    #@constraint(model, multipliers[:κ] .== 0)
+    #@constraint(model, multipliers[:ψ] .== 0)
+
+    
+   
 end
 
 function add_CR!(model, params, M, multipliers; variant)
@@ -291,7 +315,11 @@ function build_dual(data::Dict; variant="E", solve=false, verbose=false)
     if variant=="IU"
         obj -= ρ*dot(multipliers[:ι],e)
     end
-    @objective(model, Max, obj)
+    D_target = -49655//100000   
+    @constraint(model, obj - D_target == 0)
+    #@constraint(model, obj - D_target <= 1e-2)
+    #@constraint(model, D_target - obj <= 1e-2)
+    @objective(model, Max, 0)
 
     if solve
         optimize!(model)
@@ -331,120 +359,9 @@ end
 # ---------------- demo ----------------
 function demo_duals()
     println("Running dual demo...")
-    data = Dict("n"=>4,"rho"=>3.0,
-        "Q0"=>zeros(4,4),"q0"=>[-1.,0,0,0],
-        "Qi"=>nothing,"qi"=>nothing,"ri"=>nothing,
-        "Pi"=>nothing,"pi"=>nothing,"si"=>nothing,
-        "A"=>nothing,"b"=>nothing,
-        "H"=>nothing,"h"=>nothing,
-        "M"=>I(4))
-
-    
-    q0_opt = [-10.0, 10.0, -10.0, -10.0]
-    data = Dict(
-    "n"=>4, "rho"=>3.0,
-    "Q0"=>zeros(4,4),
-    "q0"=>q0_opt,
-    "Qi"=>nothing,"qi"=>nothing,"ri"=>nothing,
-    "Pi"=>nothing,"pi"=>nothing,"si"=>nothing,
-    "A"=>nothing,"b"=>nothing,
-    "H"=>nothing,"h"=>nothing,
-    "M"=>I(4)
-    )
-
-    n   = 4
-    ρ   = 3.0
-    ℓ   = [-1.0, -0.5, -2.0, -0.3]   # lower bounds
-    ū   = [ 1.0,  0.8,  0.7,  2.5]   # upper bounds
-    Mvec = max.(abs.(ℓ), abs.(ū))    # Big-M not tighter than box
-    Mmat = Diagonal(Mvec)
-
-    A = [I(n); -I(n)]
-    b = vcat(ū, -ℓ)
-    H = nothing
-    h = nothing
-    
-    data3 = Dict(
-        "n"  => n,
-        "rho"=> ρ,
-        "Q0" => zeros(n,n),
-        "q0" => [-100.0, 0.0, 100.0, -100.0],   
-        "Qi" => nothing, "qi"=>nothing, "ri"=>nothing,
-        "Pi" => nothing, "pi"=>nothing, "si"=>nothing,
-        "A"  => A, "b"=> b,
-        "H"  => H, "h"=> h,
-        "M"  => Mmat
-    )
-
-    H = [ 1.0  -2.0   0.0   0.0;
-      0.0   0.0   1.0   1.0 ]
-    h = [0.0, 0.0]
-
-    dataA = Dict(
-        "n"  => n, "rho"=> ρ,
-        "Q0" => zeros(n,n),
-        "q0" => [-29.0, 43.0, -30.0, 70.0],   # same pattern you used
-        "Qi" => nothing, "qi"=>nothing, "ri"=>nothing,
-        "Pi" => nothing, "pi"=>nothing, "si"=>nothing,
-        "A"  => A, "b"=>b,
-        "H"  => H, "h"=>h,
-        "M"  => Mmat
-    )
-
-    Q1 = diagm(0 => [2.0, 2.0, 0.0, 0.0])     # 0.5*Q1 gives x1^2 + x2^2
-    q1 = [-0.6, 0.4, 0.0, 0.0]
-    r1 = -0.87
-
-    dataB = Dict(
-        "n"  => n, "rho"=> ρ,
-        "Q0" => zeros(n,n),
-        "q0" => [-12.0, 8.0, 5.0, -3.0],      # arbitrary but bounded
-        "Qi" => (Q1,), "qi" => (q1,), "ri" => (r1,),
-        "Pi" => nothing, "pi"=>nothing, "si"=>nothing,
-        "A"  => A, "b"=>b,
-        "H"  => nothing, "h"=>nothing,
-        "M"  => Mmat
-    )
-
-    P1 = diagm(0 => [0.0, 0.0, 2.0, 2.0])   # 0.5*P1 gives x3^2 + x4^2
-    p1 = zeros(n)
-    s1 = -2.25
-
-    dataC = Dict(
-        "n"  => n, "rho"=> ρ,
-        "Q0" => zeros(n,n),
-        "q0" => [5.0, -4.0, 1.0, 2.0],
-        "Qi" => nothing, "qi"=>nothing, "ri"=>nothing,
-        "Pi" => (P1,), "pi" => (p1,), "si" => (s1,),
-        "A"  => A, "b"=>b,
-        "H"  => [1.0 -2.0 0.0 0.0], "h" => [0.0],  # optional equality as in A
-        "M"  => Mmat
-    )
-
-    # Inequality 1: (x1 - x2)^2 ≤ 0.5
-    Q2 = zeros(n,n);  Q2[1,1]=2.0; Q2[2,2]=2.0; Q2[1,2]=-2.0; Q2[2,1]=-2.0
-    q2 = zeros(n)
-    r2 = -0.5
-
-    # Inequality 2: reuse the ball from dataB
-    Q3 = Q1;  q3 = q1;  r3 = r1
-
-    # Equality: reuse the circle from dataC
-    P2 = P1;  p2 = p1;  s2 = s1
-
-    H2 = [ 1.0  -1.0   0.0   0.0 ]   # x1 - x2 = 0
-    h2 = [ 0.0 ]
-
-    dataD = Dict(
-        "n"  => n, "rho"=> ρ,
-        "Q0" => zeros(n,n),
-        "q0" => [-29.0, 43.0, -30.0, 70.0],
-        "Qi" => (Q2, Q3), "qi" => (q2, q3), "ri" => (r2, r3),
-        "Pi" => (P2,),    "pi" => (p2,),    "si" => (s2,),
-        "A"  => A, "b"=>b,
-        "H"  => H2, "h"=>h2,
-        "M"  => Mmat
-    )
+    n  = 4
+    ρ  = 3//1
+    e  = ones(Rational{Int}, n)
 
     Q0 = [
     0.0003   0.1016   0.0316   0.0867;
@@ -484,9 +401,8 @@ function demo_duals()
     "M"  => I(4)
     )
 
-    for v in ["E","EU","I","IU"]
-        build_dual(data_test4;variant=v,solve=true)
-    end
+    build_dual(data_test4;variant="EU",solve=true)
+    
 end
 demo_duals()
 end # module

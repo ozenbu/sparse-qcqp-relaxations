@@ -1,231 +1,195 @@
-using LinearAlgebra
-using Printf
+# --- Data (exact rationals) ---
+n  = 4
+ρ  = 3//1
+e  = ones(Rational{Int}, n)
 
-"""
-    load_dual_txt(path) -> Dict{Symbol,Any}
-
-Reads a TXT produced like: `name = 1.23` or `name = [ ... ; ... ]`.
-Returns a Dict mapping :name => value (scalars / vectors / matrices).
-"""
-function load_dual_txt(path::AbstractString)
-    d = Dict{Symbol,Any}()
-    for raw in eachline(path)
-        line = strip(raw)
-        isempty(line) && continue
-        startswith(line, "#") && continue
-        pos = findfirst(==( '=' ), line)
-        pos === nothing && continue
-        name = Symbol(strip(line[1:pos-1]))
-        rhs  = strip(line[pos+1:end])
-        val = try
-            Base.invokelatest(eval, Meta.parse(rhs))  # assumes Julia-literal RHS
-        catch
-            rhs
-        end
-        d[name] = val
-    end
-    return d
-end
-
-
-function compute_EU(Q0::AbstractMatrix, q0::AbstractVector, ρ::Real,
-                    M::AbstractMatrix, e::AbstractVector,
-                    mult::Dict{Symbol,Any}; tol::Real=1e-7)
-
-    γ, δ, σ, τ    = mult[:γ], mult[:δ], mult[:σ], mult[:τ]
-    ΓUU, ΓLL, ΓUL = mult[:ΓUU], mult[:ΓLL], mult[:ΓUL]
-    ϕ, ψ          = mult[:ϕ], mult[:ψ]
-    κ, Λ          = mult[:κ], mult[:Λ]
-    Πp, Πm        = mult[:Πp], mult[:Πm]
-
-    CX = ΓUU .+ ΓLL .- ΓUL .- ΓUL' .- Q0
-    Cx = q0 .+ γ .- δ .- ρ .* ϕ .+ (Πp .- Πm) * e
-    Cu = -(M*(γ .+ δ)) .+ σ .* e .- τ .- ρ .* ψ .+ κ .- (M*(Πp .+ Πm))*e .+ Λ*e
-    CR = (ΓUU .- ΓLL .+ ΓUL .- ΓUL')*M .+ ϕ*e' .- Πp .+ Πm
-    CU = -0.5 .* (M*(ΓUU .+ ΓLL .+ ΓUL .+ ΓUL')*M) .+
-          Diagonal(vec(τ)) .+ 0.5 .* (ψ*e' .+ e*ψ') .- 0.5 .* Λ .+
-          0.5 .* (M*(Πp .+ Πm) .+ (Πp' .+ Πm')*M)
-
-    nonneg_min = Dict{Symbol,Float64}(
-        :γ   => minimum(γ),
-        :δ   => minimum(δ),
-        :κ   => minimum(κ),
-        :Λ   => minimum(Λ),
-        :Πp  => minimum(Πp),
-        :Πm  => minimum(Πm),
-        :ΓUU => minimum(ΓUU),
-        :ΓLL => minimum(ΓLL),
-        :ΓUL => minimum(ΓUL),
-    )
-
-    sym_norm = Dict{Symbol,Any}(
-        :ΓUU => ΓUU - ΓUU',
-        :ΓLL => ΓLL - ΓLL',
-        :Λ   => Λ   - Λ',
-    )
-
-    return (; CX, Cx, Cu, CR, CU, nonneg_min, sym_norm)
-end
-
-
-# ------------------------------- RUN & PRINT ----------------------------------
-
-# ---- INPUTS ----
-path = "dual_EU_20251014_170533.txt"
+# Q0 (as rationals)
 Q0 = [
-    0.0003   0.1016   0.0316   0.0867;
-    0.1016   0.0020   0.1001   0.1059;
-    0.0316   0.1001  -0.0005  -0.0703;
-    0.0867   0.1059  -0.0703  -0.1063
+    3//10000    127//1250   79//2500    867//10000;
+    127//1250   1//500      1001//10000 1059//10000;
+    79//2500    1001//10000 -1//2000    -703//10000;
+    867//10000  1059//10000 -703//10000 -1063//10000
 ]
-q0 = [-0.1973, -0.2535, -0.1967, -0.0973]
-ρ  = 3.0
-M  = I(4)
-e  = ones(4)
+Q0 = Q0*20000
 
-fmt = "%.9g"                   # runtime format string is OK now
-F = Printf.Format(fmt)         # precompile format once
-printn(x) = (Printf.format(stdout, F, x); nothing)
+Q0p = max.(Q0,0)
+Q0n = max.(-Q0,0)
 
-mult = DualCheck.load_dual_txt(path)
-out  = DualCheck.compute_EU(Q0, q0, ρ, M, e, mult)
+# q0 (as rationals)
+q0 = [-1973//10000, -2535//10000, -1967//10000, -973//10000]
+q0 = q0*20000
 
-#  print dual feasibility for EU
-println("1) DUAL FEASIBILITY FOR EU SOLUTION")
-let
-    println("CX =")
-    for i in axes(out.CX,1)
-        for j in axes(out.CX,2)
-            printn(out.CX[i,j]); print("  ")
-        end
-        println()
+q0p = max.(q0,0)
+q0n = max.(-q0,0)
+
+# Box A,b with M = I
+A = [ Matrix{Rational{Int}}(I,n,n) ; -Matrix{Rational{Int}}(I,n,n) ]  # 8×4
+b = ones(Rational{Int}, 2n)
+
+# --- Core Γ construction (all elementwise ≥0, ΓUU/ΓLL symmetric) ---
+absQ0 = abs.(Q0)
+ΓUU = absQ0 .// 2         # 0.5*|Q0|
+ΓLL = copy(ΓUU)           # same
+ΓUL = zeros(Rational{Int}, n, n)
+for i in 1:n, j in 1:n
+    if Q0[i,j] < 0
+        ΓUL[i,j] = absQ0[i,j]      # 0.5*(|Q0|-Q0) at negatives → |Q0|
+    else
+        ΓUL[i,j] = 0//1
     end
-    println()
-
-    println("Cx =")
-    print("[ ")
-    for v in out.Cx
-        printn(v); print(" ")
-    end
-    println("]\n")
-
-    println("Cu =")
-    print("[ ")
-    for v in out.Cu
-        printn(v); print(" ")
-    end
-    println("]\n")
-
-    println("CR =")
-    for i in axes(out.CR,1)
-        for j in axes(out.CR,2)
-            printn(out.CR[i,j]); print("  ")
-        end
-        println()
-    end
-    println()
-
-    println("CU =")
-    for i in axes(out.CU,1)
-        for j in axes(out.CU,2)
-            printn(out.CU[i,j]); print("  ")
-        end
-        println()
-    end
-    println()
 end
+# ΓUL is symmetric here (negatives are symmetric positions)
 
-# ---- print nonneg_min ----
-println("nonneg_min =")
-for k in sort!(collect(keys(out.nonneg_min)); by=String)
-    print("  ", rpad(String(k), 6), " : ")
-    printn(out.nonneg_min[k])
-    println()
-end
-println()
+# --- E-block multipliers & (x,u,U)-related ones ---
+ϕ = zeros(Rational{Int}, n)   # phi := 0
+γ = -q0                       # γ = -q0  (elementwise ≥ 0)
+δ = zeros(Rational{Int}, n)   # δ := 0   (allowed by complementarity)
 
-# ---- print sym_norm (matrices A - Aᵀ) ----
-println("sym_norm =")
-for k in sort!(collect(keys(out.sym_norm)); by=String)
-    V = out.sym_norm[k]
-    println("  $(String(k)) =")
-    for i in axes(V,1)
-        for j in axes(V,2)
-            print("    "); printn(V[i,j]); print("  ")
-        end
-        println()
-    end
-    println()
-end
+Λ = zeros(Rational{Int}, n, n)
+κ = zeros(Rational{Int}, n)
+
+# Target the dual value you want: D_target = -0.49655  (example)
+D_target = -49655//100000   # exact rational
+σ = -D_target // ρ          # σ = 49655/300000
+
+Γsum = ΓUU .+ ΓLL .+ ΓUL .+ ΓUL'
+t    = γ .+ (Γsum * e) .// 2         # t = γ + 0.5 Γsum e
+tbar = sum(t) // n
+
+ψ = -t .+ (2*tbar - σ) .* e
+
+τ = zeros(Rational{Int}, n)                          # bump if you need W ≥ 0
+W = (Γsum .// 2) .- Diagonal(τ) .- ((ψ*e' .+ e*ψ') .// 2)
+Πp = W .// 2
+Πm = W .// 2
 
 
-println("2) PRIMAL FEASIBILITY FOR IU SOLUTION")
-function check_IU_bool(x::AbstractVector, u::AbstractVector,
-                       X::AbstractMatrix, R::AbstractMatrix, U::AbstractMatrix;
-                       rho::Real=3.0, M=I, e::AbstractVector=ones(length(u)),
-                       tol::Real=1e-8, verbose::Bool=true)
+# All A-RLT multipliers set to zero by complementarity (slacks > 0 at EU optimum)
+μ   = zeros(Rational{Int}, size(A,1))
+Θ   = zeros(Rational{Int}, size(A,1), size(A,1))
+ΓAU = zeros(Rational{Int}, size(A,1), n)
+ΓAL = zeros(Rational{Int}, size(A,1), n)
+Ω   = zeros(Rational{Int}, size(A,1), n)
 
-    n  = length(u)
-    M  = Matrix(M)
-    e  = collect(e)
+# No H equalities in this instance
+λ = Rational{Int}[]                 # empty
+Φ = Matrix{Rational{Int}}(undef, 0, n)
+Ξ = Matrix{Rational{Int}}(undef, 0, n)
+α = Rational{Int}[]                 # no quadratic ineqs
+β = Rational{Int}[]                 # no quadratic eqs
 
-    # FC
-    ok_diagU = maximum(abs.(diag(U) .- u)) ≤ tol
-    ok_bigM1 = minimum(M*U*M .- M*R' .- R*M .+ X) ≥ -tol
-    ok_bigM2 = minimum(M*U*M .+ M*R' .+ R*M .+ X) ≥ -tol
-    ok_bigM3 = minimum(M*U*M .+ M*R' .- R*M .- X) ≥ -tol
-    ok_box1  = minimum(M*u .- x)                 ≥ -tol   # x ≤ Mu
-    ok_box2  = minimum(M*u .+ x)                 ≥ -tol   # -Mu ≤ x
+# stationarity checks (note the -ρ*ψ term!)
+SX = ΓUU .+ ΓLL .- ΓUL .- ΓUL' .- Q0
+Sx = q0 .+ γ .- δ .+ (Πp .- Πm) * e
+SR = (ΓUU .- ΓLL .+ ΓUL .- ΓUL') .- Πp .+ Πm
+Su = .- (γ .+ δ) .+ σ .* e .- τ .- (ρ .* ψ) .- (Πp .+ Πm) * e
+SU = .- (Γsum) .// 2 .+ Diagonal(τ) .+ (ψ * e' .+ e * ψ') .// 2 .+ (Πp .+ Πm)
 
-    # I
-    ok_sumu  = (rho - sum(u))                    ≥ -tol   # e'u ≤ rho
-    ok_qcard = (rho^2 - 2rho*sum(u) + e' * U * e) ≥ -tol
-    ok_Ixp   = minimum(rho .* (M*u) .- rho .* x .- M*U*e .+ R*e) ≥ -tol
-    ok_Ixm   = minimum(rho .* (M*u) .+ rho .* x .- M*U*e .- R*e) ≥ -tol
+@assert SX == 0 .* SX
+@assert Sx == 0 .* Sx
+@assert SR == 0 .* SR
+@assert Su == 0 .* Su
+@assert SU == 0 .* SU
 
-    # U
-    ok_ulee  = minimum(1 .- u)                   ≥ -tol
-    eeT      = ones(n,n)
-    ok_Uself = minimum(U .- (u*e') .- (e*u') .+ eeT) ≥ -tol
-    ok_Uxp   = minimum(M*(u*e') .- x*e' .- M*U .+ R) ≥ -tol
-    ok_Uxm   = minimum(M*(u*e') .+ x*e' .- M*U .- R) ≥ -tol
 
-    # IU
-    ok_IU    = minimum(rho .* e .- rho .* u .- (sum(u)) .* e .+ U*e) ≥ -tol
+println(−μ'*b−(1/2)*b'*Θ*b− ρ*σ−κ'*e - e'*Ω'*b - (1/2)*e'*Λ*e)
 
-    result = (
-        diagU_eq_u = ok_diagU,
-        bigM1 = ok_bigM1, bigM2 = ok_bigM2, bigM3 = ok_bigM3,
-        box1 = ok_box1, box2 = ok_box2,
-        sumu_le_rho = ok_sumu, quad_card = ok_qcard,
-        Ixp = ok_Ixp, Ixm = ok_Ixm,
-        u_le_e = ok_ulee, Uself = ok_Uself, Uxp = ok_Uxp, Uxm = ok_Uxm,
-        IU = ok_IU,
-    )
 
-    if verbose
-        println("== IU primal feasibility (tol = ", tol, ") ==")
-        for (k, v) in pairs(result)          # <-- fix: iterate key=>value pairs
-            println(rpad(String(k), 14), ": ", v)
-        end
-    end
-    return result
-end
 
-# Your instance
-x = [0.5, 0.5, 0.5, 0.0]
-u = [0.5, 0.5, 0.5, 1.0]
-X = [ 0.5   0.0  0.25  -0.5;
-      0.0   0.5  0.0   -0.5;
-      0.25  0.0  0.5    0.5;
-     -0.5  -0.5  0.5    1.0 ]
-R = [ 0.5   0.0  0.25  0.5;
-      0.0   0.5  0.0   0.5;
-      0.25  0.0  0.5   0.5;
-     -0.5  -0.5  0.5   0.0 ]
-U = [ 0.5   0.0  0.25  0.5;
-      0.0   0.5  0.0   0.5;
-      0.25  0.0  0.5   0.5;
-      0.5   0.5  0.5   1.0 ]
 
-check_IU_bool(x,u,X,R,U; rho=3.0, M=I(4), e=ones(4), tol=1e-9, verbose=true)
+
+const T = Rational{Int}
+
+# Problem scalars (for reference)
+n  = 4
+ρ  = 3//1
+e  = ones(T, n)
+
+# Empty blocks
+α  = T[]                # []
+μ  = T[]                # []
+λ  = T[]                # []
+β  = T[]                # []
+
+Ω  = zeros(T, 0, 4)     # 0×4
+Φ  = zeros(T, 0, 4)     # 0×4
+ΓAU = zeros(T, 0, 4)    # 0×4
+ΓAL = zeros(T, 0, 4)    # 0×4
+Ξ  = zeros(T, 0, 4)     # 0×4
+Θ  = zeros(T, 0, 0)     # 0×0
+
+# Free / signed vectors (EU)
+ψ = T[ 603//2,  603//2, -603//2,  327//2 ]
+ϕ = T[ -632//1, -2002//1, 0//1, -3165//2 ]
+
+τ = T[ -1849//2, -4487//2, 613//2, -683//1 ]
+σ = 6595//2
+
+# Nonnegative vectors
+γ = T[ 349//2, 1204//1, 1300//1, 0//1 ]
+δ = T[ 0//1, 0//1, 0//1, 0//1 ]
+κ = T[ 0//1, 0//1, 0//1, 0//1 ]
+
+# Γ blocks (≥ 0)
+ΓUU = T[
+    6//1        8127//4    632//1     1734//1;
+    8127//4     40//1      2002//1    7825//4;
+    632//1      2002//1    0//1       0//1;
+    1734//1     7825//4    0//1       0//1
+]
+
+ΓLL = T[
+    0//1        1//4       0//1       0//1;
+    1//4        0//1       0//1       647//4;
+    0//1        0//1       0//1       0//1;
+    0//1        647//4     0//1       0//1
+]
+
+ΓUL = T[
+    0//1  0//1   0//1   0//1;
+    0//1  0//1   0//1   0//1;
+    0//1  0//1   5//1   703//1;
+    0//1  0//1   703//1 1063//1
+] # symmetric
+
+# Π blocks (≥ 0)
+Πm = T[
+    626//1  0//1   0//1        31//4;
+    0//1    1962//1 0//1       3297//4;
+    0//1    0//1   0//1        0//1;
+    0//1    0//1   3165//2     3165//2
+]
+
+Πp = T[
+    0//1     2799//2  0//1       4439//4;
+    59//2    0//1     0//1       2467//4;
+    632//1   2002//1  0//1       0//1;
+    303//2   212//1   0//1       0//1
+]
+
+# Λ (≥ 0, symmetric)
+Λ = T[
+    0//1  0//1  0//1     0//1;
+    0//1  0//1  0//1     0//1;
+    0//1  0//1  0//1     77//2;
+    0//1  0//1  77//2    0//1
+]
+
+
+# stationarity checks (note the -ρ*ψ term!)
+SX = ΓUU .+ ΓLL .- ΓUL .- ΓUL' .- Q0
+Sx = q0 .+ γ .- (ρ .* ϕ)  .+ (Πp .- Πm) * e
+SR = (ΓUU .- ΓLL .+ ΓUL .- ΓUL') .+ ϕ*e'.- Πp .+ Πm
+Su = .- (γ .+ δ) .+ σ .* e .- τ .- (ρ .* ψ) .- (Πp .+ Πm) * e .+ Λ*e
+SU = .- (ΓUU .+ ΓLL .+ ΓUL .+ ΓUL') ./ 2 .+ Diagonal(τ) .+ (ψ * e' .+ e * ψ') ./ 2 .- Λ ./ 2 .+ ( Πp .+ Πm .+ Πp' .+ Πm')./ 2 
+
+@assert SX == 0 .* SX
+@assert Sx == 0 .* Sx
+@assert SR == 0 .* SR
+@assert Su == 0 .* Su
+@assert SU == 0 .* SU
+
+
+println(−μ'*b−(1/2)*b'*Θ*b− ρ*σ−κ'*e - e'*Ω'*b - (1/2)*e'*Λ*e)
+
+

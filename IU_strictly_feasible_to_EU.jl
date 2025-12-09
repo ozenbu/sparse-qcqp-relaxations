@@ -26,9 +26,9 @@ end
 function sample_xhat(n::Int, ρ::Float64; seed::Union{Nothing,Int}=nothing)
     if seed !== nothing; Random.seed!(seed); end
     r = rand(n)                     # (0,1)
-    margin = rand()                 # in [0,1) and ρ ≥ 1 ⇒ margin < ρ
+    margin = ρ*rand()               # in ρ*[0,1) 
     α = min(1.0, (ρ - margin) / sum(r))
-    return α .* r
+    return round.(α .* r; digits = 2) 
 end
 
 "Step 2: Minimize eᵀu subject to IU-feasibility with x fixed to x̂ --"
@@ -36,6 +36,7 @@ function solve_step2_IU(data::Dict, xhat::AbstractVector; optimizer=Gurobi.Optim
     params = prepare_instance(data)
     n = params.n
     @assert length(xhat) == n
+    ρ = params.ρ 
 
     "Introduce variables"
     m = Model(optimizer); JuMP.set_silent(m); verbose && set_optimizer_attribute(m,"OutputFlag",1)
@@ -47,6 +48,7 @@ function solve_step2_IU(data::Dict, xhat::AbstractVector; optimizer=Gurobi.Optim
     add_FI!(m, x, u, X, R, U, params)  # I
     add_FU!(m, x, u, X, R, U, params)  # U
     add_FIU!(m, u, U, params)          # I×U coupling
+    @constraint(m, sum(u) .<= ρ - 1e-2)
 
     @objective(m, Min, sum(u))         # min eᵀu
     write_to_file(m, "step2.lp")       # LP format
@@ -133,17 +135,18 @@ end
 
 
 
-data1 = Dict(
-    "n"=>4, "rho"=>3.0,
-    "Q0"=>zeros(4,4), "q0"=>[-1.0,0.0,0.0,0.0],
-    "Qi"=>nothing,"qi"=>nothing,"ri"=>nothing,
-    "Pi"=>nothing,"pi"=>nothing,"si"=>nothing,
-    "A"=>nothing,"b"=>nothing,
-    "H"=>nothing,"h"=>nothing,
-    "M"=>I(4)
-)
 
-data_test = Dict(
+A = [ 1.0  0.0  0.0  0.0
+    0.0  1.0  0.0  0.0
+    0.0  0.0  1.0  0.0
+    0.0  0.0  0.0  1.0
+    -1.0  0.0  0.0  0.0
+    0.0 -1.0  0.0  0.0
+    0.0  0.0 -1.0  0.0
+    0.0  0.0  0.0 -1.0 ]
+
+b = [1.0, 1.0, 1.0, 1.0,   1.0, 1.0, 1.0, 1.0]
+data_test4 = Dict(
 "n"  => 4,
 "rho"=> 3.0,
 "Q0" => [-50.0  50.0  50.0  50.0;
@@ -153,7 +156,7 @@ data_test = Dict(
 "q0" => [-100.0, -100.0, -100.0, -75.0],
 "Qi" => nothing, "qi" => nothing, "ri" => nothing,
 "Pi" => nothing, "pi" => nothing, "si" => nothing,
-"A"  => nothing, "b"  => nothing,
+"A"  => A, "b"  => b,
 "H"  => nothing, "h"  => nothing,
 "M"  => I(4)
 )
@@ -168,7 +171,7 @@ Xhat = [
 
 
 
-st3, xEU, uEU, XEU, REU, UEU, objEU = solve_step3_EU(data_test, xhat, Xhat; verbose=false)
+st3, xEU, uEU, XEU, REU, UEU, objEU = solve_step3_EU(data_test4, xhat, Xhat; verbose=false)
 if st3 == :OPTIMAL
     println("Step3(EU): status=$st3,   sum(uEU)=", sum(uEU), " (should equal ρ)")
     dump_vars(xEU, uEU, XEU, REU, UEU; label="— Step 3 solution —")
@@ -186,14 +189,20 @@ end
 println("Testing if etx = rho/2 => EU infeasible ")
 xhat = [0.5, 0.5, 0.5, 0.5, 0.0]  
 Xhat = nothing
-data_test = Dict(
+data_test5 = Dict(
 "n"  => 5,
 "rho"=> 4.0,
 "Qi" => nothing, "qi" => nothing, "ri" => nothing,
 "Pi" => nothing, "pi" => nothing, "si" => nothing,
-"A"  => nothing, "b"  => nothing,
+"A"  => A, "b"  => b,
 "H"  => nothing, "h"  => nothing,
 "M"  => I(5)
 )
 
-res = run_three_steps(data_test; xhat=xhat, Xhat=Xhat, seed=nothing, verbose=false)
+#res = run_three_steps(data_test5; xhat=xhat, Xhat=Xhat, seed=nothing, verbose=false)
+xhat =[0.5, 0.5, 0.5, 0.5]  
+Xhat = [ 0.5  0.5  0.0  0.0
+ 0.5  0.5  0.0  0.0
+ 0.0  0.0  0.5  0.0
+ 0.0  0.0  0.0  0.5]
+res = run_three_steps(data_test4; xhat=xhat, Xhat=Xhat, seed=4, verbose=false)
