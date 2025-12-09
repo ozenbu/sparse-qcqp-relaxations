@@ -1,7 +1,8 @@
-*
+
 
 *.png
-
-!*.jl
-
-!**/*.jl
+*.pdf
+*.lp
+REF/*
+*.txt
+*.py
