@@ -822,10 +822,717 @@ end
 
 end # module
 
+
 using .InstanceGen
 
 insts = InstanceGen.build_instances()
-InstanceGen.save_instances_json("instances.json", insts)
 
-println("Saved $(length(insts)) instances to instances.json")
+# instances.json dosyasını bu script’in olduğu klasöre koy:
+instances_path = joinpath(@__DIR__, "instances.json")
 
+InstanceGen.save_instances_json(instances_path, insts)
+
+println("Saved $(length(insts)) instances to $(instances_path)")
+
+
+
+
+
+module UserInstanceGen
+
+using Random, LinearAlgebra
+
+export generate_instance
+
+# ---------------------------
+# Basic random helpers
+# ---------------------------
+
+rand_vec_int(rng::AbstractRNG, n::Int; vals = -5:5) = rand(rng, vals, n)
+
+"Random positive integer slack δ ∈ [lo, hi]."
+rand_slack(rng::AbstractRNG; lo::Int = 1, hi::Int = 5) = rand(rng, lo:hi)
+
+"""
+rand_symm_from_eigs(rng, n; num_neg, nonneg_vals, neg_vals)
+
+Builds a symmetric matrix Q = Qmat * Diag(eigs) * Qmat'
+with:
+- num_neg eigenvalues drawn from neg_vals (negative integers),
+- the remaining from nonneg_vals (nonnegative integers).
+Only the signs matter for convexity / nonconvexity.
+"""
+function rand_symm_from_eigs(
+    rng::AbstractRNG,
+    n::Int;
+    num_neg::Int,
+    nonneg_vals::UnitRange{Int} = 0:5,
+    neg_vals::UnitRange{Int} = -5:-1,
+)
+    @assert 0 ≤ num_neg ≤ n "num_neg must be between 0 and n"
+    num_nonneg = n - num_neg
+
+    negs    = num_neg == 0    ? Int[] : rand(rng, neg_vals,    num_neg)
+    nonnegs = num_nonneg == 0 ? Int[] : rand(rng, nonneg_vals, num_nonneg)
+
+    eigs = vcat(negs, nonnegs)
+    eigs = eigs[randperm(rng, length(eigs))]
+
+    R = randn(rng, n, n)
+    Qfac, _ = qr(R)
+    Qmat = Matrix(Qfac)
+    Λ = Diagonal(Float64.(eigs))
+
+    return Qmat * Λ * Qmat'
+end
+
+"""
+Quadratic inequality:
+
+    0.5 xᵀ Q x + qᵀ x + r ≤ 0
+
+with Q built to have num_neg negative eigenvalues, and constructed so that
+g(xbar) = -δ < 0 at the anchor xbar.
+"""
+function make_qineq_with_eigs(
+    rng::AbstractRNG,
+    xbar::AbstractVector;
+    num_neg::Int = 0,
+    nonneg_vals::UnitRange{Int} = 0:5,
+    neg_vals::UnitRange{Int} = -5:-1,
+    qvals::UnitRange{Int} = -5:5,
+    slack_lo::Int = 1,
+    slack_hi::Int = 5,
+)
+    n = length(xbar)
+    Q = rand_symm_from_eigs(rng, n;
+                            num_neg     = num_neg,
+                            nonneg_vals = nonneg_vals,
+                            neg_vals    = neg_vals)
+    q = rand_vec_int(rng, n; vals = qvals)
+
+    g0 = 0.5 * (xbar' * Q * xbar) + dot(q, xbar)
+    δ  = rand_slack(rng; lo = slack_lo, hi = slack_hi)
+
+    r = -g0 - δ
+
+    return Matrix{Float64}(Q), Float64.(q), Float64(r)
+end
+
+"""
+Quadratic equality:
+
+    0.5 xᵀ P x + pᵀ x + s = 0
+
+constructed so that g(xbar) = 0 at the anchor xbar. We do not control
+eigenvalues here explicitly; QE is always treated as nonconvex.
+"""
+function make_qeq_with_anchor(
+    rng::AbstractRNG,
+    xbar::AbstractVector;
+    num_neg::Int = 0,
+    nonneg_vals::UnitRange{Int} = 0:5,
+    neg_vals::UnitRange{Int} = -5:-1,
+    pvals::UnitRange{Int} = -3:3,
+)
+    n = length(xbar)
+    P = rand_symm_from_eigs(rng, n;
+                            num_neg     = num_neg,
+                            nonneg_vals = nonneg_vals,
+                            neg_vals    = neg_vals)
+    p = rand_vec_int(rng, n; vals = pvals)
+
+    g0 = 0.5 * (xbar' * P * xbar) + dot(p, xbar)
+    s  = -g0
+
+    return Matrix{Float64}(P), Float64.(p), Float64(s)
+end
+
+"""
+Random objective:
+
+    0.5 xᵀ Q0 x + q0ᵀ x
+
+with controlled number of negative eigenvalues.
+"""
+function rand_objective(
+    rng::AbstractRNG,
+    n::Int;
+    num_neg::Int = 0,
+    nonneg_vals::UnitRange{Int} = 0:5,
+    neg_vals::UnitRange{Int} = -5:-1,
+    qvals::UnitRange{Int} = -5:5,
+)
+    Q0 = rand_symm_from_eigs(rng, n;
+                             num_neg     = num_neg,
+                             nonneg_vals = nonneg_vals,
+                             neg_vals    = neg_vals)
+    q0 = rand_vec_int(rng, n; vals = qvals)
+    return Matrix{Float64}(Q0), Float64.(q0)
+end
+
+# ---------------------------
+# Big-M from bounds
+# ---------------------------
+
+"""
+Compute Big-M variants from componentwise bounds ell ≤ x ≤ u.
+
+- M_common[i] = scale * max(|ell[i]|, |u[i]|)
+- M_minus[i]  = scale * max(0, -ell[i])
+- M_plus[i]   = scale * max(0,  u[i])
+"""
+function bigM_from_bounds(ell::AbstractVector, u::AbstractVector; scale::Real = 1.0)
+    @assert length(ell) == length(u)
+    @assert scale ≥ 1.0 "scale should be ≥ 1.0 to keep Big-M safe"
+
+    base    = max.(abs.(ell), abs.(u))
+    M       = scale .* base
+    Mminus  = scale .* max.(0.0, -ell)
+    Mplus   = scale .* max.(0.0,  u)
+
+    return M, Mminus, Mplus
+end
+
+# ---------------------------
+# Anchor generators
+# ---------------------------
+
+"Generate a sparse anchor xbar with ‖xbar‖₀ ≤ ρ in ℝⁿ (general case)."
+function generate_sparse_anchor(rng::AbstractRNG, n::Int, rho::Int;
+                                vals::UnitRange{Int} = -3:3)
+    x = zeros(Float64, n)
+    rho == 0 && return x
+
+    k = rand(rng, 1:rho)                     # support size
+    idx = randperm(rng, n)[1:k]
+    for i in idx
+        v = 0
+        while v == 0
+            v = rand(rng, vals)
+        end
+        x[i] = float(v)
+    end
+    return x
+end
+
+"Generate an anchor xbar on the unit simplex with ‖xbar‖₀ ≤ ρ."
+function generate_simplex_anchor(rng::AbstractRNG, n::Int, rho::Int)
+    @assert rho ≥ 1 "On the simplex we need at least one nonzero variable (ρ ≥ 1)."
+    s = rand(rng, 1:min(rho, n))             # support size on simplex
+    idx = randperm(rng, n)[1:s]
+    x   = zeros(Float64, n)
+    vals = rand(rng, s)
+    vals ./= sum(vals)
+    for (j, i) in enumerate(idx)
+        x[i] = vals[j]
+    end
+    return x
+end
+
+# ---------------------------
+# Bounding constructors
+# ---------------------------
+
+"""
+Simplex bounds: x ≥ 0, eᵀ x = 1.
+
+Returns:
+- A, b for x ≥ 0 encoded as -I x ≤ 0,
+- H, h for eᵀ x = 1,
+- ell, u as componentwise bounds [0,1].
+"""
+function build_simplex_bounds(n::Int)
+    A   = -Matrix{Float64}(I, n, n)
+    b   = zeros(Float64, n)
+    H   = ones(Float64, 1, n)
+    h   = [1.0]
+    ell = zeros(Float64, n)
+    u   = ones(Float64, n)
+    return A, b, H, h, ell, u
+end
+
+"""
+Box bounds: ℓ ≤ x ≤ u, constructed around xbar.
+
+We choose random positive margins around xbar so that xbar is strictly inside the box.
+
+Returns:
+- A, b encoding ℓ ≤ x ≤ u as [I; -I] x ≤ [u; -ℓ],
+- ell, u.
+"""
+function build_box_bounds(
+    rng::AbstractRNG,
+    xbar::AbstractVector;
+    min_margin::Real = 1.0,
+    max_margin::Real = 3.0,
+)
+    n = length(xbar)
+    ell = zeros(Float64, n)
+    u   = zeros(Float64, n)
+    for i in 1:n
+        m_low = rand(rng) * (max_margin - min_margin) + min_margin
+        m_up  = rand(rng) * (max_margin - min_margin) + min_margin
+        ell[i] = xbar[i] - m_low
+        u[i]   = xbar[i] + m_up
+    end
+    A = vcat(Matrix{Float64}(I, n, n), -Matrix{Float64}(I, n, n))
+    b = vcat(u, -ell)
+    return A, b, ell, u
+end
+
+"""
+Linear polytope bounds via LI only (no box/simplex/QI/QE).
+
+We build a system:
+    x_i ≤ u_i   (i = 1,…,n)
+    -∑_j x_j ≤ b_last
+with b_last chosen so that xbar is strictly feasible.
+
+This set is bounded because the rows {e₁,…,eₙ, -e} positively span ℝⁿ.
+
+We then optionally add extra LI constraints (already counted in n_LI).
+Returns:
+- A, b,
+- ell, u as safe (possibly loose) componentwise bounds.
+"""
+function build_linear_polytope_bounds(
+    rng::AbstractRNG,
+    xbar::AbstractVector,
+    n_LI::Int;
+    min_margin::Real = 1.0,
+    max_margin::Real = 3.0,
+)
+    n = length(xbar)
+
+    # choose upper bounds around xbar
+    u = zeros(Float64, n)
+    for i in 1:n
+        margin = rand(rng) * (max_margin - min_margin) + min_margin
+        u[i] = xbar[i] + abs(margin)
+    end
+
+    δ = 1.0
+    b_last = -sum(xbar) + δ     # -∑ x ≤ b_last ⇒ ∑ x ≥ -b_last
+
+    # base constraints: x_i ≤ u_i, and -∑ x ≤ b_last
+    A = Matrix{Float64}(undef, 0, n)
+    b = Float64[]
+
+    A = vcat(A, Matrix{Float64}(I, n, n))
+    b = vcat(b, u)
+
+    A = vcat(A, (-ones(Float64, 1, n)))
+    b = vcat(b, b_last)
+
+    base_n_LI = n + 1
+    if n_LI > base_n_LI
+        extra = n_LI - base_n_LI
+        for _ in 1:extra
+            a = randn(rng, n)
+            δk = rand(rng) * 1.0 + 0.5
+            bk = dot(a, xbar) + δk
+            A = vcat(A, (a'))
+            b = vcat(b, bk)
+        end
+    end
+
+    # safe lower bounds from the base structure
+    ell = zeros(Float64, n)
+    for i in 1:n
+        ell[i] = -b_last - sum(u[j] for j in 1:n if j != i)
+    end
+
+    return A, b, ell, u
+end
+
+"""
+Quadratic ball inequality around xbar:
+
+    0.5 xᵀ Q x + qᵀ x + r ≤ 0
+
+with Q = I, representing ‖x - xbar‖ ≤ R.
+
+We choose R > 0 so that xbar is strictly inside the ball.
+Returns:
+- Q, q, r,
+- ell, u as componentwise bounds [xbar_i - R, xbar_i + R].
+"""
+function build_qi_ball_bounds(
+    rng::AbstractRNG,
+    xbar::AbstractVector;
+    radius_margin::Real = 1.0,
+)
+    n = length(xbar)
+    R = norm(xbar) + radius_margin
+    Q = Matrix{Float64}(I, n, n)
+    q = -collect(xbar)
+    r = 0.5 * (dot(xbar, xbar) - R^2)   # g(x) = 0.5||x-xbar||² - 0.5R²
+
+    ell = xbar .- R
+    u   = xbar .+ R
+
+    return Q, q, r, ell, u
+end
+
+"""
+Quadratic ball equality around xbar:
+
+    0.5 xᵀ P x + pᵀ x + s = 0
+
+representing ‖x - xbar‖² = R² with P = 2I.
+
+Returns:
+- P, p, s,
+- ell, u as componentwise bounds [xbar_i - R, xbar_i + R].
+"""
+function build_qe_ball_bounds(
+    rng::AbstractRNG,
+    xbar::AbstractVector;
+    radius_margin::Real = 1.0,
+)
+    n = length(xbar)
+    R = norm(xbar) + radius_margin
+    P = 2.0 .* Matrix{Float64}(I, n, n)
+    p = -2.0 .* collect(xbar)
+    s = dot(xbar, xbar) - R^2
+
+    ell = xbar .- R
+    u   = xbar .+ R
+
+    return P, p, s, ell, u
+end
+
+# ---------------------------
+# Spectral control for Q0 and QI
+# ---------------------------
+
+"""
+Build (neg_obj, neg_QI) from user-specified neg_eig_counts (or default),
+and check consistency with want_convex, n_QI, n, and (optionally) QI-ball bounding.
+
+Returns:
+- neg_obj::Int
+- neg_QI::Vector{Int} of length n_QI
+"""
+function build_neg_eig_counts(
+    n::Int,
+    n_QI::Int,
+    want_convex::Bool,
+    neg_eig_counts::Union{Nothing,Vector{Int}},
+)
+    # Default pattern if not provided
+    if neg_eig_counts === nothing
+        if want_convex
+            # all PSD
+            return 0, fill(0, n_QI)
+        else
+            # introduce nonconvexity via the objective if dimension allows
+            if n > 1
+                return 1, fill(0, n_QI)
+            else
+                # in 1D we cannot have 1 ≤ k < n, so keep everything 0;
+                # nonconvexity (if any) must come from quadratic equalities.
+                return 0, fill(0, n_QI)
+            end
+        end
+    end
+
+    # If provided, check length and ranges
+    counts = neg_eig_counts::Vector{Int}
+    expected_len = 1 + n_QI
+    @assert length(counts) == expected_len "neg_eig_counts must have length 1 + n_QI."
+
+    for k in counts
+        @assert 0 ≤ k < n "Each entry in neg_eig_counts must satisfy 0 ≤ k < n."
+    end
+
+    neg_obj = counts[1]
+    neg_QI  = counts[2:end]
+
+    if want_convex
+        @assert all(counts .== 0) "In convex mode, all entries of neg_eig_counts must be zero."
+    else
+        @assert any(counts .> 0) "In nonconvex mode, at least one entry in neg_eig_counts must be strictly positive."
+    end
+
+    return neg_obj, neg_QI
+end
+
+# ---------------------------
+# Main instance generator
+# ---------------------------
+
+"""
+generate_instance(...)
+
+Build a single QCQP instance according to user-specified counts and convexity options.
+
+Arguments (all keyword):
+- n::Int: dimension
+- rho::Int: cardinality bound (‖x‖₀ ≤ ρ)
+- n_LI::Int: number of user linear inequalities (LI)
+- n_LE::Int: number of user linear equalities (LE)
+- n_QI::Int: number of quadratic inequalities (QI)
+- n_QE::Int: number of quadratic equalities (QE)
+- want_convex::Bool: whether the continuous quadratic part should be convex
+- unit_simplex::Bool: if true, include unit simplex constraints
+- box_constraint::Bool: if true, include a box constraint
+- neg_eig_counts::Union{Nothing,Vector{Int}}: optional spectral pattern
+- seed::Int: RNG seed
+- bigM_scale::Real: scaling factor for Big-M (≥ 1)
+
+Returns:
+- inst::Dict{String,Any}, containing Q0, q0, Qi, qi, ri, Pi, pi, si,
+  A, b, H, h, ell, u, M, M_minus, M_plus, and metadata.
+"""
+function generate_instance(;
+    n::Int,
+    rho::Int,
+    n_LI::Int,
+    n_LE::Int,
+    n_QI::Int,
+    n_QE::Int,
+    want_convex::Bool,
+    unit_simplex::Bool = false,
+    box_constraint::Bool = false,
+    neg_eig_counts::Union{Nothing,Vector{Int}} = nothing,
+    seed::Int = 1,
+    bigM_scale::Real = 1.0,
+)
+    rng = MersenneTwister(seed)
+
+    # -----------------------
+    # Step 0: basic checks
+    # -----------------------
+    @assert n ≥ 1 "n must be at least 1."
+    @assert 0 ≤ rho ≤ n "rho must satisfy 0 ≤ rho ≤ n."
+    @assert n_LI ≥ 0 && n_LE ≥ 0 && n_QI ≥ 0 && n_QE ≥ 0
+
+    # -----------------------
+    # Step 1: choose bounding type
+    # -----------------------
+    # Priority: simplex > box > QI-ball > QE-ball > LI-poly
+    bounding_type::Symbol
+    if unit_simplex
+        bounding_type = :simplex
+        @assert rho ≥ 1 "With unit_simplex=true, we need ρ ≥ 1 (simplex points have at least one nonzero)."
+    elseif box_constraint
+        bounding_type = :box
+    elseif n_QI > 0
+        bounding_type = :qi_ball
+    elseif n_QE > 0
+        bounding_type = :qe_ball
+        @assert !want_convex "Quadratic equalities are only allowed in nonconvex mode."
+    else
+        bounding_type = :li_poly
+        @assert n_QI == 0 && n_QE == 0 "In LI-only mode we require n_QI = n_QE = 0."
+        @assert n_LI > 0 "At least one linear inequality is required if there are no QI/QE and no simplex/box."
+        @assert n_LI ≥ n + 1 "We require n_LI ≥ n+1 to build a bounded polytope from LI only."
+    end
+
+    # -----------------------
+    # Step 2: spectral control
+    # -----------------------
+    neg_obj, neg_QI = build_neg_eig_counts(n, n_QI, want_convex, neg_eig_counts)
+
+    # If we use the first QI as a ball for bounding, it must be PSD (no negative eigs)
+    if bounding_type == :qi_ball && n_QI ≥ 1
+        @assert neg_QI[1] == 0 "When using the first QI as a ball, its neg_eig_count must be 0."
+    end
+
+    # In convex mode we do not allow genuinely quadratic equalities
+    if want_convex
+        @assert n_QE == 0 "Quadratic equalities are not allowed in convex mode."
+    end
+
+    # -----------------------
+    # Step 3: anchor xbar
+    # -----------------------
+    xbar = if bounding_type == :simplex
+        generate_simplex_anchor(rng, n, rho)
+    else
+        generate_sparse_anchor(rng, n, rho)
+    end
+
+    # -----------------------
+    # Step 4: build bounding constraints and ell,u
+    # -----------------------
+    A = Matrix{Float64}(undef, 0, n)
+    b = Float64[]
+    H = Matrix{Float64}(undef, 0, n)
+    h = Float64[]
+    ell = zeros(Float64, n)
+    u   = zeros(Float64, n)
+
+    # We also need slots for one "bounding" QI or QE if applicable
+    Qi = Vector{Matrix{Float64}}()
+    qi = Vector{Vector{Float64}}()
+    ri = Float64[]
+
+    Pi = Vector{Matrix{Float64}}()
+    pi_vecs = Vector{Vector{Float64}}()
+    si = Float64[]
+
+    # For LI-only bounding, n_LI is fully consumed by the bounding polytope
+    use_LI_for_bounding = (bounding_type == :li_poly)
+
+    if bounding_type == :simplex
+        A0, b0, H0, h0, ell0, u0 = build_simplex_bounds(n)
+        A = vcat(A, A0)
+        b = vcat(b, b0)
+        H = vcat(H, H0)
+        h = vcat(h, h0)
+        ell .= ell0
+        u   .= u0
+
+    elseif bounding_type == :box
+        A0, b0, ell0, u0 = build_box_bounds(rng, xbar)
+        A = vcat(A, A0)
+        b = vcat(b, b0)
+        ell .= ell0
+        u   .= u0
+
+    elseif bounding_type == :qi_ball
+        Qb, qb, rb, ell0, u0 = build_qi_ball_bounds(rng, xbar)
+        push!(Qi, Qb)
+        push!(qi, qb)
+        push!(ri, rb)
+        ell .= ell0
+        u   .= u0
+
+    elseif bounding_type == :qe_ball
+        Pb, pb, sb, ell0, u0 = build_qe_ball_bounds(rng, xbar)
+        push!(Pi, Pb)
+        push!(pi_vecs, pb)
+        push!(si, sb)
+        ell .= ell0
+        u   .= u0
+
+    elseif bounding_type == :li_poly
+        A0, b0, ell0, u0 = build_linear_polytope_bounds(rng, xbar, n_LI)
+        A = vcat(A, A0)
+        b = vcat(b, b0)
+        ell .= ell0
+        u   .= u0
+    end
+
+    # -----------------------
+    # Step 5: add extra LI/LE (if any)
+    # -----------------------
+
+    # Extra LI: only if we did NOT already use n_LI for bounding
+    if !use_LI_for_bounding && n_LI > 0
+        for _ in 1:n_LI
+            a_int = rand(rng, -2:2, n)
+            while all(a_int .== 0)
+                a_int = rand(rng, -2:2, n)
+            end
+            a = Float64.(a_int)
+            δk = rand(rng) * 1.0 + 0.5
+            bk = dot(a, xbar) + δk
+            A = vcat(A, a')
+            b = vcat(b, bk)
+        end
+    end
+
+    # Extra LE: always generated according to n_LE
+    if n_LE > 0
+        H_extra = Matrix{Float64}(undef, n_LE, n)
+        h_extra = zeros(Float64, n_LE)
+        for r in 1:n_LE
+            v_int = rand(rng, -2:2, n)
+            while all(v_int .== 0)
+                v_int = rand(rng, -2:2, n)
+            end
+            v = Float64.(v_int)
+            H_extra[r, :] .= v
+            h_extra[r] = dot(v, xbar)
+        end
+        H = vcat(H, H_extra)
+        h = vcat(h, h_extra)
+    end
+
+    # -----------------------
+    # Step 6: add remaining QI/QE (beyond bounding ones)
+    # -----------------------
+
+    # We may have already used the first QI as a ball in qi_ball case
+    start_qi_idx = (bounding_type == :qi_ball) ? 2 : 1
+
+    if n_QI ≥ 1
+        @assert length(neg_QI) == n_QI
+    end
+
+    for j in start_qi_idx:n_QI
+        num_neg = neg_QI[j]
+        Qj, qj, rj = make_qineq_with_eigs(rng, xbar; num_neg = num_neg)
+        push!(Qi, Qj)
+        push!(qi, qj)
+        push!(ri, rj)
+    end
+
+    # Quadratic equalities: we may already have used the first QE as a ball
+    start_qe_idx = (bounding_type == :qe_ball) ? 2 : 1
+    for _ in start_qe_idx:n_QE
+        Pj, pj, sj = make_qeq_with_anchor(rng, xbar)
+        push!(Pi, Pj)
+        push!(pi_vecs, pj)
+        push!(si, sj)
+    end
+
+    # -----------------------
+    # Step 7: objective
+    # -----------------------
+    Q0, q0 = rand_objective(rng, n; num_neg = neg_obj)
+
+    # -----------------------
+    # Step 8: Big-M from ell,u
+    # -----------------------
+    M_common, M_minus, M_plus = bigM_from_bounds(ell, u; scale = bigM_scale)
+
+    # -----------------------
+    # Step 9: pack into Dict
+    # -----------------------
+    inst = Dict{String,Any}()
+
+    inst["n"]   = n
+    inst["rho"] = rho
+
+    inst["Q0"] = Q0
+    inst["q0"] = q0
+
+    inst["Qi"] = (length(Qi) == 0) ? nothing : Qi
+    inst["qi"] = (length(qi) == 0) ? nothing : qi
+    inst["ri"] = (length(ri) == 0) ? nothing : ri
+
+    inst["Pi"] = (length(Pi) == 0) ? nothing : Pi
+    inst["pi"] = (length(pi_vecs) == 0) ? nothing : pi_vecs
+    inst["si"] = (length(si) == 0) ? nothing : si
+
+    inst["A"] = (size(A, 1) == 0) ? nothing : A
+    inst["b"] = (length(b) == 0) ? nothing : b
+    inst["H"] = (size(H, 1) == 0) ? nothing : H
+    inst["h"] = (length(h) == 0) ? nothing : h
+
+    inst["ell"]     = ell
+    inst["u"]       = u
+    inst["M"]       = M_common
+    inst["M_minus"] = M_minus
+    inst["M_plus"]  = M_plus
+
+    inst["xbar"]          = xbar
+    inst["want_convex"]   = want_convex
+    inst["unit_simplex"]  = unit_simplex
+    inst["box_constraint"]= box_constraint
+    inst["neg_eig_counts"] = neg_eig_counts
+    inst["seed"]          = seed
+
+    tag = want_convex ? "CVX" : "NCVX"
+    id = "n$(n)_rho$(rho)_LI$(n_LI)_LE$(n_LE)_QI$(n_QI)_QE$(n_QE)_$(tag)_seed$(seed)"
+    inst["id"] = id
+
+    return inst
+end
+
+end # module

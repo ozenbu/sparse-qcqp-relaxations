@@ -114,7 +114,7 @@ function analyze_instance(data::Dict{String,Any};
             println(">>> [$(inst_label)] solving relaxation = $(md)")
         end
 
-        # Gurobi ONLY for SOC3x3 variants
+        # Gurobi ONLY for x3 variants
         local opt
         if md in (:RLT_SOC3x3_X, :RLT_SOC3x3_U, :RLT_SOC3x3_XU)
             println("    -> using Gurobi.Optimizer for $(md)")
@@ -247,6 +247,7 @@ end # module
 module PlotGradualSDP
 
 using CSV, DataFrames, Plots
+using Measures: mm
 import Main.RLT_SDP_Batch: gap_pct  # tek tanım orada
 
 const RelaxationOrder = [
@@ -298,17 +299,15 @@ function plot_instance(df::DataFrame, inst_id::Int; outdir::AbstractString = "pl
         return nothing
     end
 
-    # RelaxationOrder sırasına göre sort için yardımcı kolon
-    order_map = Dict(m => i for (i, m) in enumerate(RelaxationOrder))
-    sub[!, :mode_order] = [order_map[m] for m in sub.mode_str]
-    sort!(sub, :mode_order)
+    # Artık RelaxationOrder'a göre sort ETMİYORUZ.
+    # Onun yerine EU gap'e göre sıralayacağız.
 
-    x     = collect(1:nrow(sub))
-    modes = sub.mode_str
+    k     = nrow(sub)
+    modes = copy(sub.mode_str)
 
-    EU_gap = similar(x, Float64)
-    IU_gap = similar(x, Float64)
-    times  = similar(x, Float64)
+    EU_gap = Vector{Float64}(undef, k)
+    IU_gap = Vector{Float64}(undef, k)
+    times  = Vector{Float64}(undef, k)
 
     for (idx, row) in enumerate(eachrow(sub))
         eu = row.EU_obj
@@ -328,6 +327,21 @@ function plot_instance(df::DataFrame, inst_id::Int; outdir::AbstractString = "pl
         times[idx] = t
     end
 
+    # --- EU gap'e göre büyükten küçüğe sıralama ---
+    sort_key = similar(EU_gap)
+    for i in 1:k
+        g = EU_gap[i]
+        sort_key[i] = isnan(g) ? -Inf : g  # NaN olanlar en sona
+    end
+
+    perm   = sortperm(sort_key; rev = true)  # büyük EU gap önce
+    EU_gap = EU_gap[perm]
+    IU_gap = IU_gap[perm]
+    times  = times[perm]
+    modes  = modes[perm]
+
+    x = collect(1:k)
+
     n   = sub.n[1]
     rho = sub.rho[1]
 
@@ -346,6 +360,7 @@ function plot_instance(df::DataFrame, inst_id::Int; outdir::AbstractString = "pl
         linestyle = :solid,
         label     = "EU gap",
         size      = (1200, 600),
+        margin    = 15mm,
     )
 
     plot!(p, x, IU_gap;
@@ -360,7 +375,7 @@ function plot_instance(df::DataFrame, inst_id::Int; outdir::AbstractString = "pl
         marker    = :square,
         linestyle = :dash,
         label     = "time",
-        ylims     = (0, 10),
+        ylims     = (0, 15),
         color     = :green,
     )
 

@@ -86,30 +86,58 @@ add_SOC2x2_full_XU!(m, x, X, u, U) = (add_SOC2x2_full_X!(m, x, X);
                                       add_SOC2x2_full_U!(m, u, U))
 
 # ------------------------------------------------------------------
-# 3) SOC3×3: (Xii−xi²)(Xjj−xj²) ≥ (Xij−xixj)²  (and same for U,u)
-#    Encode with RSOC on Schur complement pieces.
+# 3) Directional SOC: d'X d ≥ (x'd)^2 for d ∈ {e_i, e_i ± e_j}
+#    Implemented via RSOC. For d = e_i we reuse SOC2x2_diag_*.
 # ------------------------------------------------------------------
 function add_SOC3x3_X!(model::Model, x, X)
     n = length(x)
+
+    # d = e_i  -->  X[ii] ≥ x[i]^2  (reuse existing code)
+    add_SOC2x2_diag_X!(model, x, X)
+
+    # d = e_i + e_j  and  d = e_i - e_j
     for i in 1:n, j in i+1:n
+        # d = e_i + e_j
         @constraint(model,
-            [X[i,i] - x[i]^2,
-             X[j,j] - x[j]^2,
-             sqrt(2.0) * (X[i,j] - x[i]*x[j])] in MOI.RotatedSecondOrderCone(3)
+            [X[i,i] + 2*X[i,j] + X[j,j],
+             0.5,
+             x[i] + x[j]] in MOI.RotatedSecondOrderCone(3)
+        )
+
+        # d = e_i - e_j
+        @constraint(model,
+            [X[i,i] - 2*X[i,j] + X[j,j],
+             0.5,
+             x[i] - x[j]] in MOI.RotatedSecondOrderCone(3)
         )
     end
+
     return nothing
 end
 
 function add_SOC3x3_U!(model::Model, u, U)
     n = length(u)
+
+    # d = e_i  -->  U[ii] ≥ u[i]^2  (reuse existing code)
+    add_SOC2x2_diag_U!(model, u, U)
+
+    # d = e_i ± e_j
     for i in 1:n, j in i+1:n
+        # d = e_i + e_j
         @constraint(model,
-            [U[i,i] - u[i]^2,
-             U[j,j] - u[j]^2,
-             sqrt(2.0) * (U[i,j] - u[i]*u[j])] in MOI.RotatedSecondOrderCone(3)
+            [U[i,i] + 2*U[i,j] + U[j,j],
+             0.5,
+             u[i] + u[j]] in MOI.RotatedSecondOrderCone(3)
+        )
+
+        # d = e_i - e_j
+        @constraint(model,
+            [U[i,i] - 2*U[i,j] + U[j,j],
+             0.5,
+             u[i] - u[j]] in MOI.RotatedSecondOrderCone(3)
         )
     end
+
     return nothing
 end
 
