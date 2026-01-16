@@ -7,7 +7,9 @@ const MOI = JuMP.MOI
 using ..RLTBigM: prepare_instance, add_FC!, add_FE!, add_FI!, add_FU!, add_FIU!
 using ..SDPBigM: add_SDP_lift!
 
-
+# --------------------------------------------------------------
+# Available relaxation modes
+# --------------------------------------------------------------
 const RelaxationModes = (
     :RLT,
 
@@ -23,6 +25,10 @@ const RelaxationModes = (
     :RLT_SOC3x3_U,
     :RLT_SOC3x3_XU,
 
+    :RLT_SOC2x2_3x3_X,
+    :RLT_SOC2x2_3x3_U,
+    :RLT_SOC2x2_3x3_XU,
+
     :RLT_PSD3x3_X,
     :RLT_PSD3x3_U,
     :RLT_PSD3x3_XU,
@@ -31,15 +37,16 @@ const RelaxationModes = (
     :RLT_blockSDP_U,
     :RLT_blockSDP_XU,
 
-    :RLT_full_SDP,   # stays as single mode
+    :RLT_full_SDP,
 )
+
 
 
 all_pairs(n::Int) = [(i,j) for i in 1:n for j in i+1:n]
 
 # ------------------------------------------------------------------
 # 1) diagonal 2×2 SOC: Xii ≥ xi², Ujj ≥ uj²
-#   [Xii, 0.5, xi] ∈ RSOC, [Ujj, 0.5, uj] ∈ RSOC
+#    [Xii, 0.5, xi] ∈ RSOC, [Ujj, 0.5, uj] ∈ RSOC
 # ------------------------------------------------------------------
 function add_SOC2x2_diag_X!(model::Model, x, X)
     n = length(x)
@@ -57,8 +64,10 @@ function add_SOC2x2_diag_U!(model::Model, u, U)
     return nothing
 end
 
-add_SOC2x2_diag_XU!(m, x, X, u, U) = (add_SOC2x2_diag_X!(m, x, X);
-                                      add_SOC2x2_diag_U!(m, u, U))
+add_SOC2x2_diag_XU!(m, x, X, u, U) = (
+    add_SOC2x2_diag_X!(m, x, X);
+    add_SOC2x2_diag_U!(m, u, U)
+)
 
 # ------------------------------------------------------------------
 # 2) full 2×2 SOC: diag + all 2×2 minors
@@ -68,7 +77,9 @@ function add_SOC2x2_full_X!(model::Model, x, X)
     n = length(x)
     add_SOC2x2_diag_X!(model, x, X)
     for i in 1:n, j in i+1:n
-        @constraint(model, [X[i,i], X[j,j], sqrt(2.0) * X[i,j]] in MOI.RotatedSecondOrderCone(3))
+        @constraint(model,
+            [X[i,i], X[j,j], sqrt(2.0) * X[i,j]] in MOI.RotatedSecondOrderCone(3)
+        )
     end
     return nothing
 end
@@ -77,25 +88,24 @@ function add_SOC2x2_full_U!(model::Model, u, U)
     n = length(u)
     add_SOC2x2_diag_U!(model, u, U)
     for i in 1:n, j in i+1:n
-        @constraint(model, [U[i,i], U[j,j], sqrt(2.0) * U[i,j]] in MOI.RotatedSecondOrderCone(3))
+        @constraint(model,
+            [U[i,i], U[j,j], sqrt(2.0) * U[i,j]] in MOI.RotatedSecondOrderCone(3)
+        )
     end
     return nothing
 end
 
-add_SOC2x2_full_XU!(m, x, X, u, U) = (add_SOC2x2_full_X!(m, x, X);
-                                      add_SOC2x2_full_U!(m, u, U))
+add_SOC2x2_full_XU!(m, x, X, u, U) = (
+    add_SOC2x2_full_X!(m, x, X);
+    add_SOC2x2_full_U!(m, u, U)
+)
 
 # ------------------------------------------------------------------
-# 3) Directional SOC: d'X d ≥ (x'd)^2 for d ∈ {e_i, e_i ± e_j}
-#    Implemented via RSOC. For d = e_i we reuse SOC2x2_diag_*.
+# 3) Directional SOC: d'Z d ≥ (z'd)^2
+#    Core directional part (only d = e_i ± e_j, no diagonals here)
 # ------------------------------------------------------------------
-function add_SOC3x3_X!(model::Model, x, X)
+function add_SOC3x3_dir_X!(model::Model, x, X)
     n = length(x)
-
-    # d = e_i  -->  X[ii] ≥ x[i]^2  (reuse existing code)
-    add_SOC2x2_diag_X!(model, x, X)
-
-    # d = e_i + e_j  and  d = e_i - e_j
     for i in 1:n, j in i+1:n
         # d = e_i + e_j
         @constraint(model,
@@ -111,17 +121,11 @@ function add_SOC3x3_X!(model::Model, x, X)
              x[i] - x[j]] in MOI.RotatedSecondOrderCone(3)
         )
     end
-
     return nothing
 end
 
-function add_SOC3x3_U!(model::Model, u, U)
+function add_SOC3x3_dir_U!(model::Model, u, U)
     n = length(u)
-
-    # d = e_i  -->  U[ii] ≥ u[i]^2  (reuse existing code)
-    add_SOC2x2_diag_U!(model, u, U)
-
-    # d = e_i ± e_j
     for i in 1:n, j in i+1:n
         # d = e_i + e_j
         @constraint(model,
@@ -137,12 +141,47 @@ function add_SOC3x3_U!(model::Model, u, U)
              u[i] - u[j]] in MOI.RotatedSecondOrderCone(3)
         )
     end
-
     return nothing
 end
 
-add_SOC3x3_XU!(m, x, X, u, U) = (add_SOC3x3_X!(m, x, X);
-                                 add_SOC3x3_U!(m, u, U))
+# "Pure" SOC-3×3 family: diagonals (d = e_i) + directional (d = e_i ± e_j)
+function add_SOC3x3_X!(model::Model, x, X)
+    add_SOC2x2_diag_X!(model, x, X)  # d = e_i
+    add_SOC3x3_dir_X!(model, x, X)   # d = e_i ± e_j
+    return nothing
+end
+
+function add_SOC3x3_U!(model::Model, u, U)
+    add_SOC2x2_diag_U!(model, u, U)  # d = e_i
+    add_SOC3x3_dir_U!(model, u, U)   # d = e_i ± e_j
+    return nothing
+end
+
+add_SOC3x3_XU!(m, x, X, u, U) = (
+    add_SOC3x3_X!(m, x, X);
+    add_SOC3x3_U!(m, u, U)
+)
+
+# ------------------------------------------------------------------
+# 3b) Combined SOC-2×2-full + SOC-3×3 directional
+#     (avoid duplicating diagonal SOC constraints)
+# ------------------------------------------------------------------
+function add_SOC2x2_3x3_X!(model::Model, x, X)
+    add_SOC2x2_full_X!(model, x, X)  # diag + 2×2 minors
+    add_SOC3x3_dir_X!(model, x, X)   # only d = e_i ± e_j
+    return nothing
+end
+
+function add_SOC2x2_3x3_U!(model::Model, u, U)
+    add_SOC2x2_full_U!(model, u, U)  # diag + 2×2 minors
+    add_SOC3x3_dir_U!(model, u, U)   # only d = e_i ± e_j
+    return nothing
+end
+
+add_SOC2x2_3x3_XU!(m, x, X, u, U) = (
+    add_SOC2x2_3x3_X!(m, x, X);
+    add_SOC2x2_3x3_U!(m, u, U)
+)
 
 # ------------------------------------------------------------------
 # 4) PSD 3×3 principals of [1 x'; x X] and [1 u'; u U]
@@ -171,8 +210,10 @@ function add_PSD3x3_U!(model::Model, u, U)
     return nothing
 end
 
-add_PSD3x3_XU!(m, x, X, u, U) = (add_PSD3x3_X!(m, x, X);
-                                 add_PSD3x3_U!(m, u, U))
+add_PSD3x3_XU!(m, x, X, u, U) = (
+    add_PSD3x3_X!(m, x, X);
+    add_PSD3x3_U!(m, u, U)
+)
 
 # ------------------------------------------------------------------
 # 5) block SDP constraints: [1  x'; x  X]  and  [1  u'; u  U]
@@ -191,8 +232,10 @@ function add_blockSDP_U!(model::Model, u, U)
     return nothing
 end
 
-add_blockSDP_XU!(m, x, X, u, U) = (add_blockSDP_X!(m, x, X);
-                                   add_blockSDP_U!(m, u, U))
+add_blockSDP_XU!(m, x, X, u, U) = (
+    add_blockSDP_X!(m, x, X);
+    add_blockSDP_U!(m, u, U)
+)
 
 # ------------------------------------------------------------------
 # Build and solve
@@ -207,7 +250,7 @@ function build_RLT_SDP_model(
     @assert relaxation in RelaxationModes "Unknown relaxation mode: $relaxation"
 
     params = prepare_instance(data)
-    @unpack n, ρ, Q0, q0, Qi, qi, ri, Pi, pi, si, A, b, ℓ, H, h, η, M, e = params
+    @unpack n, ρ, Q0, q0, Qi, qi, ri, Pi, pi, si, A, b, ℓ, H, h, η, e = params
 
     m = Model(optimizer)
 
@@ -240,8 +283,8 @@ function build_RLT_SDP_model(
     end
 
     if relaxation == :RLT
-       # pure RLT, no extra lift
-       
+        # pure RLT, no extra lift
+
     # ---- SOC 2x2 diag ----
     elseif relaxation == :RLT_SOC2x2_diag_X
         add_SOC2x2_diag_X!(m, x, X)
@@ -258,13 +301,21 @@ function build_RLT_SDP_model(
     elseif relaxation == :RLT_SOC2x2_full_XU
         add_SOC2x2_full_XU!(m, x, X, u, U)
 
-    # ---- SOC 3x3 ----
+    # ---- SOC 3x3 (directional) ----
     elseif relaxation == :RLT_SOC3x3_X
         add_SOC3x3_X!(m, x, X)
     elseif relaxation == :RLT_SOC3x3_U
         add_SOC3x3_U!(m, u, U)
     elseif relaxation == :RLT_SOC3x3_XU
         add_SOC3x3_XU!(m, x, X, u, U)
+
+    # ---- SOC 2x2 + 3x3 (combined) ----
+    elseif relaxation == :RLT_SOC2x2_3x3_X
+        add_SOC2x2_3x3_X!(m, x, X)
+    elseif relaxation == :RLT_SOC2x2_3x3_U
+        add_SOC2x2_3x3_U!(m, u, U)
+    elseif relaxation == :RLT_SOC2x2_3x3_XU
+        add_SOC2x2_3x3_XU!(m, x, X, u, U)
 
     # ---- PSD 3x3 ----
     elseif relaxation == :RLT_PSD3x3_X
@@ -307,8 +358,10 @@ function solve_RLT_SDP(
     optimizer = MosekTools.Optimizer,
     relaxation::Symbol = :RLT,
 )
-    m, t = build_RLT_SDP_model(data; variant=variant, optimizer=optimizer,
-                               build_only=false, relaxation=relaxation)
+    m, t = build_RLT_SDP_model(
+        data; variant=variant, optimizer=optimizer,
+        build_only=false, relaxation=relaxation
+    )
     st = termination_status(m)
 
     if st == MOI.OPTIMAL || st == MOI.LOCALLY_SOLVED || st == MOI.ALMOST_OPTIMAL

@@ -4,7 +4,6 @@ using JSON, CSV
 using JuMP, MosekTools, LinearAlgebra
 using OrderedCollections: OrderedDict
 using Main.RLT_SDP_Combo: solve_RLT_SDP, RelaxationModes
-using Gurobi
 
 const MOI = JuMP.MOI
 
@@ -114,26 +113,17 @@ function analyze_instance(data::Dict{String,Any};
             println(">>> [$(inst_label)] solving relaxation = $(md)")
         end
 
-        # Gurobi ONLY for x3 variants
-        local opt
-        if md in (:RLT_SOC3x3_X, :RLT_SOC3x3_U, :RLT_SOC3x3_XU)
-            println("    -> using Gurobi.Optimizer for $(md)")
-            opt = Gurobi.Optimizer
-        else
-            opt = optimizer
-        end
-
         stE, objE, _, _, _, _, _, tE = solve_RLT_SDP(
             data;
             variant    = "EU",
-            optimizer  = opt,
+            optimizer  = optimizer,
             relaxation = md,
         )
 
         stI, objI, _, _, _, _, _, tI = solve_RLT_SDP(
             data;
             variant    = "IU",
-            optimizer  = opt,
+            optimizer  = optimizer,
             relaxation = md,
         )
 
@@ -193,7 +183,7 @@ function run_batch(instances_json::AbstractString;
         for r in rows
             push!(all_rows, (
                 inst_id        = k,
-                inst_label     = inst_label,              # <<< yeni kolon
+                inst_label     = inst_label,
                 n              = get(data,"n",missing),
                 rho            = get(data,"rho",missing),
                 mode           = r.mode,
@@ -213,7 +203,7 @@ function run_batch(instances_json::AbstractString;
 
         push!(json_out, OrderedDict(
             "inst_id"        => k,
-            "inst_label"     => inst_label,              # <<< JSON’a da yaz
+            "inst_label"     => inst_label,
             "n"              => get(data,"n",nothing),
             "rho"            => get(data,"rho",nothing),
             "exact_status"   => exact_block["exact_status"],
@@ -244,6 +234,7 @@ end
 
 end # module
 
+
 module PlotGradualSDP
 
 using CSV, DataFrames, Plots
@@ -264,6 +255,10 @@ const RelaxationOrder = [
     "RLT_SOC3x3_X",
     "RLT_SOC3x3_U",
     "RLT_SOC3x3_XU",
+
+    "RLT_SOC2x2_3x3_X",
+    "RLT_SOC2x2_3x3_U",
+    "RLT_SOC2x2_3x3_XU",
 
     "RLT_PSD3x3_X",
     "RLT_PSD3x3_U",
@@ -361,22 +356,29 @@ function plot_instance(df::DataFrame, inst_id::Int; outdir::AbstractString = "pl
         label     = "EU gap",
         size      = (1200, 600),
         margin    = 15mm,
+        color     = :olivedrab,
     )
 
     plot!(p, x, IU_gap;
         marker    = :diamond,
         linestyle = :solid,
         label     = "IU gap",
+        color     = :maroon,
     )
 
-    # 2. y-ekseni: time (s), worst-case time
+    # 2. y-ekseni: time (s) – dynamic y-limits
+    finite_times = filter(!isnan, times)
+    tmax = isempty(finite_times) ? 1.0 : maximum(finite_times)
+    ymax = 1.05 * tmax
+
     plot!(twinx(), x, times;
         ylabel    = "Time (s)",
         marker    = :square,
+        color     = :aquamarine2,
         linestyle = :dash,
         label     = "time",
-        ylims     = (0, 15),
-        color     = :green,
+        legend    = :topright,
+        ylims     = (0, ymax),
     )
 
     title!(p, "instance $label (n=$n, ρ=$rho)")
@@ -400,27 +402,29 @@ end
 end # module
 
 
+if isinteractive()
 
-using .RLTBigM
-using .RLT_SDP_Batch
-using .PlotGradualSDP
-using MosekTools
-using Gurobi
+    using .RLTBigM
+    using .RLT_SDP_Batch
+    using .PlotGradualSDP
+    using MosekTools
+    using Gurobi
 
-
-# 2) Run all relaxations on all instances
-batch = RLT_SDP_Batch.run_batch(
-    "instances.json";
-    out_csv   = "gradual_sdp_results.csv",
-    out_json  = "gradual_sdp_results.json",
-    optimizer = MosekTools.Optimizer,
-    exact_cb  = data -> RLTBigM.build_and_solve(
-        data; variant="EXACT", optimizer=Gurobi.Optimizer
+    #=
+    # 2) Run all relaxations on all instances
+    batch = RLT_SDP_Batch.run_batch(
+        "instances.json";
+        out_csv   = "gradual_sdp_results.csv",
+        out_json  = "gradual_sdp_results.json",
+        optimizer = MosekTools.Optimizer,
+        exact_cb  = data -> RLTBigM.build_and_solve(
+            data; variant="EXACT", optimizer=Gurobi.Optimizer
+        )
     )
-)
 
-println(batch)
+    println(batch)
+    =#
 
-
-# 3) Plot all instances (gap vs mode, time on right axis)
-PlotGradualSDP.plot_all_instances("gradual_sdp_results.csv"; outdir = "plots")
+    # 3) Plot all instances (gap vs mode, time on right axis)
+    PlotGradualSDP.plot_all_instances("gradual_sdp_results.csv"; outdir = "plots")
+end 

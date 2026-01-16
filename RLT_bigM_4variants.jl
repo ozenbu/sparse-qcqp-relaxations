@@ -527,7 +527,9 @@ end
 
 end # module RLTBigM
 
+#=
 if isinteractive()
     using .RLTBigM
     RLTBigM.demo()
 end
+=#
