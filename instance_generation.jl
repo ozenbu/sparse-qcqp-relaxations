@@ -1,3 +1,7 @@
+###############################
+# InstanceGen.jl
+###############################
+
 module InstanceGen
 
 using Random, LinearAlgebra
@@ -9,6 +13,7 @@ const MOI = JuMP.MOI
 # ---------------------------
 # Integer / basic helpers
 # ---------------------------
+
 rand_vec_int(rng::AbstractRNG, n::Int; vals=-10:10) = rand(rng, vals, n)
 
 function symmetrize_int!(Q::AbstractMatrix)
@@ -29,6 +34,7 @@ rand_slack(rng::AbstractRNG; lo::Int = 1, hi::Int = 5) = rand(rng, lo:hi)
 # ---------------------------
 # Eigenvalue-controlled symmetric matrices
 # ---------------------------
+
 """
 rand_symm_from_eigs(rng, n; num_neg, nonneg_vals, neg_vals)
 
@@ -80,6 +86,7 @@ end
 # ---------------------------
 # A that positively spans R^n
 # ---------------------------
+
 function build_bounded_A(; n::Int, mode::Symbol=:minimal, rng::AbstractRNG)
     if mode === :minimal
         A = vcat(Matrix{Int}(I, n, n), -ones(Int, 1, n))
@@ -97,6 +104,7 @@ end
 # ---------------------------
 # Bounds via LP
 # ---------------------------
+
 function bounds_via_LP(A::AbstractMatrix, b::AbstractVector;
                        H::Union{Nothing,AbstractMatrix}=nothing,
                        h::Union{Nothing,AbstractVector}=nothing,
@@ -135,6 +143,7 @@ end
 # ---------------------------
 # Big-M from bounds
 # ---------------------------
+
 """
 bigM_from_bounds(ℓ, u; scale, common)
 
@@ -165,6 +174,7 @@ end
 # ---------------------------
 # Simplex and box instances
 # ---------------------------
+
 """
 Simplex:  x ≥ 0,  eᵀx = 1.
 
@@ -213,6 +223,7 @@ end
 # ---------------------------
 # Quadratic rows with anchor
 # ---------------------------
+
 """
 Quadratic inequality:
 
@@ -283,6 +294,7 @@ end
 # ---------------------------
 # Dict packer
 # ---------------------------
+
 function pack(; n::Int, rho::Real=3.0, Q0=nothing, q0=nothing,
                Qi=nothing, qi=nothing, ri=nothing,
                Pi=nothing, pi=nothing, si=nothing,
@@ -298,27 +310,27 @@ function pack(; n::Int, rho::Real=3.0, Q0=nothing, q0=nothing,
         M = ones(Float64, n)
     end
     d = Dict{String,Any}(
-        "n"        => n,
-        "rho"      => rho,
-        "Q0"       => Q0,
-        "q0"       => q0,
-        "Qi"       => Qi,
-        "qi"       => qi,
-        "ri"       => ri,
-        "Pi"       => Pi,
-        "pi"       => pi,
-        "si"       => si,
-        "A"        => A,
-        "b"        => b,
-        "H"        => H,
-        "h"        => h,
-        "M"        => M,
-        "base_tag" => String(base_tag),
-        "convexity" => String(convexity),
-        "n_LI"     => n_LI,
-        "n_LE"     => n_LE,
-        "n_QI"     => n_QI,
-        "n_QE"     => n_QE,
+        "n"          => n,
+        "rho"        => rho,
+        "Q0"         => Q0,
+        "q0"         => q0,
+        "Qi"         => Qi,
+        "qi"         => qi,
+        "ri"         => ri,
+        "Pi"         => Pi,
+        "pi"         => pi,
+        "si"         => si,
+        "A"          => A,
+        "b"          => b,
+        "H"          => H,
+        "h"          => h,
+        "M"          => M,
+        "base_tag"   => String(base_tag),
+        "convexity"  => String(convexity),
+        "n_LI"       => n_LI,
+        "n_LE"       => n_LE,
+        "n_QI"       => n_QI,
+        "n_QE"       => n_QE,
         "bigM_scale" => bigM_scale,
     )
     if seed !== nothing
@@ -330,6 +342,7 @@ end
 # ---------------------------
 # Constraint-type helpers
 # ---------------------------
+
 has_lin_ineq(d::Dict{String,Any}) = get(d, "A", nothing) !== nothing
 has_lin_eq(d::Dict{String,Any})   = get(d, "H", nothing) !== nothing
 has_qineq(d::Dict{String,Any})    = get(d, "Qi", nothing) !== nothing
@@ -358,8 +371,8 @@ function make_id(d::Dict{String,Any})
     rho  = Int(round(d["rho"]))
     base = get(d, "base_tag", "")
 
-    # Check if we have explicit counts (from UserInstanceGen or future extensions)
-    has_counts = haskey(d, "n_LI") || haskey(d, "n_LE") || haskey(d, "n_QI") || haskey(d, "n_QE")
+    has_counts = haskey(d, "n_LI") || haskey(d, "n_LE") ||
+                 haskey(d, "n_QI") || haskey(d, "n_QE")
     n_LI = has_counts ? get(d, "n_LI", 0) : 0
     n_LE = has_counts ? get(d, "n_LE", 0) : 0
     n_QI = has_counts ? get(d, "n_QI", 0) : 0
@@ -426,6 +439,7 @@ end
 # ---------------------------
 # Build a small test suite
 # ---------------------------
+
 function build_instances(; objective_scale::Real=10.0, optimizer=MosekTools.Optimizer)
     insts = Vector{Dict{String,Any}}(undef, 8)
 
@@ -535,9 +549,7 @@ function build_instances(; objective_scale::Real=10.0, optimizer=MosekTools.Opti
         insts[i] = d
     end
 
-    # 6) Box + one quadratic inequality
-    #    - QI convex (num_neg=0),
-    #    - objective nonconvex (num_neg_q0 > 0) → overall NCVX.
+    # 6) Box + one quadratic inequality (convex QI, nonconvex objective)
     let i = 6, rng = MersenneTwister(6)
         is_cvx = true
         n   = 4
@@ -589,7 +601,7 @@ function build_instances(; objective_scale::Real=10.0, optimizer=MosekTools.Opti
         rho = 8.0
         A, b, M, ℓ, u, xhat = box_instance(n; rng=rng)
 
-        # First QI: explicit small indefinite-ish matrix (no eigencontrol here)
+        # First QI: explicit small matrix
         Qqi1 = zeros(Float64, n, n)
         Qqi1[1,1] = 2.0; Qqi1[2,2] = 2.0; Qqi1[1,2] = -2.0; Qqi1[2,1] = -2.0
         qqi1 = zeros(Float64, n)
@@ -597,7 +609,7 @@ function build_instances(; objective_scale::Real=10.0, optimizer=MosekTools.Opti
         g01  = 0.5 * (xhat' * Qqi1 * xhat) + dot(qqi1, xhat)
         rqi1 = -g01 - τ1
 
-        # Second QI: eigenvalue-controlled (can choose num_neg≥0)
+        # Second QI: eigenvalue-controlled
         Qqi2, qqi2, rqi2 = make_qineq_with_anchor(rng, xhat; num_neg=1)
 
         # One quadratic equality
@@ -626,11 +638,9 @@ function build_instances(; objective_scale::Real=10.0, optimizer=MosekTools.Opti
     new_inst = deepcopy(base)
     new_inst["M"] = 10.0 .* base["M"]
     new_inst["bigM_scale"] = get(base, "bigM_scale", 1.0) * 10.0
-    # seed aynı kalıyor; ID içinde sadece Mx10 farkı olacak
     push!(insts, new_inst)
 
-
-    # ID'leri tek formatta oluştur
+    # Assign IDs
     for d in insts
         d["id"] = make_id(d)
     end
@@ -641,6 +651,7 @@ end
 # ---------------------------
 # JSON I/O
 # ---------------------------
+
 function save_instances_json(path::AbstractString, insts)
     open(path, "w") do io
         JSON.print(io, insts, 2)
@@ -656,10 +667,9 @@ end # module InstanceGen
 
 
 
-
-
-
-
+###############################
+# UserInstanceGen
+###############################
 
 module UserInstanceGen
 
@@ -686,13 +696,12 @@ Random symmetric matrix with prescribed numbers of negative eigenvalues.
 Builds Q = Qmat * Diag(eigs) * Qmat', where:
 - `num_neg` eigenvalues are drawn from `neg_vals` (negative integers),
 - the remaining eigenvalues are drawn from `nonneg_vals` (nonnegative integers).
-Only the sign pattern matters for convexity (PSD vs indefinite).
 """
 function rand_symm_from_eigs(
     rng::AbstractRNG,
     n::Int;
     num_neg::Int,
-    nonneg_vals::UnitRange{Int} = 1:5,
+    nonneg_vals::UnitRange{Int} = 0:5,
     neg_vals::UnitRange{Int} = -5:-1,
 )
     @assert 0 ≤ num_neg ≤ n "num_neg must be between 0 and n"
@@ -731,78 +740,6 @@ function rand_objective(
     return scale_Q .* Matrix{Float64}(Q0), scale_q .* Float64.(q0)
 end
 
-"""
-Quadratic inequality:
-
-    g(x) = 0.5 x'Qx + q'x + r ≤ 0
-
-constructed so that:
-- Q has `num_neg` negative eigenvalues,
-- g(xbar) = -δ < 0 at the anchor `xbar`.
-
-For convex QI that we use in bounds, num_neg=0 and nonneg_vals=1:5
-⇒ Q is strongly convex (λ_min >= 1).
-"""
-function make_qineq_with_eigs(
-    rng::AbstractRNG,
-    xbar::AbstractVector;
-    num_neg::Int = 0,
-    nonneg_vals::UnitRange{Int} = 1:5,
-    neg_vals::UnitRange{Int} = -5:-1,
-    qvals::UnitRange{Int} = -5:5,
-    slack_lo::Int = 1,
-    slack_hi::Int = 5,
-    scale_Q::Real = 1.0,
-    scale_q::Real = 1.0,
-)
-    n = length(xbar)
-    Q_raw = rand_symm_from_eigs(rng, n;
-                                num_neg     = num_neg,
-                                nonneg_vals = nonneg_vals,
-                                neg_vals    = neg_vals)
-    Q = scale_Q .* Matrix{Float64}(Q_raw)
-    q = scale_q .* Float64.(rand_vec_int(rng, n; vals = qvals))
-
-    g0 = 0.5 * (xbar' * Q * xbar) + dot(q, xbar)
-    δ  = rand_slack(rng; lo = slack_lo, hi = slack_hi)
-
-    r = -g0 - δ
-
-    return Q, q, Float64(r)
-end
-
-"""
-Quadratic equality:
-
-    h(x) = 0.5 x'P x + p'x + s = 0
-
-constructed so that h(xbar) = 0. We do not control eigenvalues here; QE is always
-treated as nonconvex at the feasible-set level when P ≠ 0.
-"""
-function make_qeq_with_anchor(
-    rng::AbstractRNG,
-    xbar::AbstractVector;
-    num_neg::Int = 0,
-    nonneg_vals::UnitRange{Int} = 1:5,
-    neg_vals::UnitRange{Int} = -5:-1,
-    pvals::UnitRange{Int} = -3:3,
-    scale_P::Real = 1.0,
-    scale_p::Real = 1.0,
-)
-    n = length(xbar)
-
-    P_raw = rand_symm_from_eigs(rng, n;
-                                num_neg     = num_neg,
-                                nonneg_vals = nonneg_vals,
-                                neg_vals    = neg_vals)
-    P = scale_P .* Matrix{Float64}(P_raw)
-    p = scale_p .* Float64.(rand_vec_int(rng, n; vals = pvals))
-
-    g0 = 0.5 * (xbar' * P * xbar) + dot(p, xbar)
-    s  = -g0
-
-    return P, p, Float64(s)
-end
 
 # ============================
 # Big-M from bounds
@@ -880,17 +817,15 @@ Unit simplex base:
 
 Returns:
 - A, b for x >= 0 encoded as -I x <= 0,
-- H, h for e'x = 1,
-- ell, u as [0,1] bounds.
+- H, h for e'x = 1.
 """
+
 function build_simplex_bounds(n::Int)
     A   = -Matrix{Float64}(I, n, n)
     b   = zeros(Float64, n)
     H   = ones(Float64, 1, n)
     h   = [1.0]
-    ell = zeros(Float64, n)
-    u   = ones(Float64, n)
-    return A, b, H, h, ell, u
+    return A, b, H, h
 end
 
 """
@@ -899,11 +834,8 @@ Box base: a random box around xbar.
 We choose random positive margins around each coordinate of xbar so that
     ell[i] < xbar[i] < u[i],
 and encode ell <= x <= u as [I; -I] x <= [u; -ell].
-
-Returns:
-- A, b,
-- ell, u.
 """
+
 function build_box_bounds(
     rng::AbstractRNG,
     xbar::AbstractVector;
@@ -924,60 +856,89 @@ function build_box_bounds(
     A = vcat(Matrix{Float64}(I, n, n), -Matrix{Float64}(I, n, n))
     b = vcat(u, -ell)
 
-    return A, b, ell, u
+    return A, b
 end
 
+
 """
-General polytope base using LI only.
+General polytope base using Todd-style construction.
 
-We build a bounded polytope of the form:
-    x_i <= u_i  (i = 1,...,n)
-    -sum_j x_j <= b_last
-
-where u and b_last are chosen so that xbar is strictly feasible.
-The normals {e_1,..., e_n, -e} positively span R^n, so the region is bounded.
+We build a bounded polytope of the form
+    P = { x : A x ≤ b }
+such that:
+  - rows(B) are unbiased directions on the sphere (Todd, 1991),
+  - the last row is a normalized negative conic combination of rows(B),
+  - xbar is strictly feasible: A * xbar < b.
 
 Returns:
-- A, b,
-- ell, u as safe (possibly conservative) bounds derived from these constraints.
+- A, b for Ax ≤ b with x̄ strictly feasible.
 """
 function build_polytope_bounds(
     rng::AbstractRNG,
     xbar::AbstractVector;
-    min_margin::Real = 1.0,
-    max_margin::Real = 3.0,
+    slack_min::Real = 1.0,
+    slack_max::Real = 3.0,
+    max_rank_tries::Int = 50,
 )
     n = length(xbar)
+    @assert slack_min > 0 "slack_min must be > 0."
+    @assert slack_max ≥ slack_min "slack_max must be ≥ slack_min."
 
-    # Upper bounds x_i <= u_i
-    u = zeros(Float64, n)
-    for i in 1:n
-        margin = rand(rng) * (max_margin - min_margin) + min_margin
-        u[i] = xbar[i] + abs(margin)
+    # --------------------------------------------------
+    # 1) Todd-style B: unbiased row directions + rank(B) = n
+    # --------------------------------------------------
+    B = zeros(Float64, n, n)
+    got_full_rank = false
+
+    for _try in 1:max_rank_tries
+        for i in 1:n
+            g = randn(rng, n)          # g_i ~ N(0, I_n)
+            a = g / norm(g)            # normalize ⇒ a ∈ S^{n-1}
+            B[i, :] .= a               # row i of B
+        end
+
+        if rank(B) == n
+            got_full_rank = true
+            break
+        end
     end
 
-    # Constraint -sum x <= b_last so that xbar is strictly feasible
-    δ = 1.0
-    b_last = -sum(xbar) + δ
-
-    # A has n+1 rows: n for x_i <= u_i, 1 for -sum x <= b_last
-    A = zeros(Float64, n + 1, n)
-    b = zeros(Float64, n + 1)
-
-    for i in 1:n
-        A[i, i] = 1.0
-        b[i]    = u[i]
-    end
-    A[n+1, :] .= -1.0
-    b[n+1]    = b_last
-
-    # Lower bounds from -sum x <= b_last and x_j <= u_j for j != i
-    ell = zeros(Float64, n)
-    for i in 1:n
-        ell[i] = -b_last - sum(u[j] for j in 1:n if j != i)
+    if !got_full_rank
+        error("build_polytope_bounds: could not generate full-rank B after $max_rank_tries tries.")
     end
 
-    return A, b, ell, u
+    # --------------------------------------------------
+    # 2) Positive vector w ∈ Rⁿ_{++}
+    # --------------------------------------------------
+    # Example: w_i ∈ (1,2), so strictly positive and O(1) scaled.
+    w = 1 .+ rand(rng, n)
+
+    # --------------------------------------------------
+    # 3) Last row r = normalized ( - wᵀ B )
+    #
+    # r0 = - wᵀ B  (row combination of rows(B) with positive weights)
+    # normalize ⇒ r = r0 / ‖r0‖
+    # still r = - ŵᵀ B with ŵ > 0 (just rescaled).
+    # --------------------------------------------------
+    r0_row = -(w' * B)          # 1×n row, equals -wᵀ B
+    norm_r0 = norm(r0_row)
+    @assert norm_r0 > 0 "Norm of -wᵀB is zero, something is wrong."
+    r_row = r0_row ./ norm_r0   # 1×n row with ‖r_row‖₂ = 1
+
+    # Stack rows: A = [B; r_row]
+    A = vcat(B, Array(r_row))   # (n+1)×n
+
+    # --------------------------------------------------
+    # 4) RHS: b = A * xbar + [s; δ], with s > 0, δ > 0
+    # so that xbar is strictly feasible.
+    # --------------------------------------------------
+    s = slack_min .+ (slack_max - slack_min) .* rand(rng, n)   # s ∈ Rⁿ_{++}
+    δ = slack_min + (slack_max - slack_min) * rand(rng)        # δ > 0
+
+    shift = vcat(s, [δ])
+    b = A * xbar + shift
+
+    return A, b
 end
 
 # ============================
@@ -1090,11 +1051,6 @@ end
 """
 Add n_extra linear inequalities via vertex cuts (nonredundant, keep xbar feasible),
 using the objective vector c of the vertex LP as the normal direction.
-
-Each new inequality is of the form a'x <= β with:
-- a' x̄ < β,
-- a' v  > β,
-so x̄ remains feasible, while the chosen vertex v is eliminated.
 """
 function add_extra_LI_vertex_cuts!(
     rng::AbstractRNG,
@@ -1162,10 +1118,6 @@ end
 
 """
 Add n_LE linear equalities of the form a'x = β using vertex + objective vector.
-
-Each new equality:
-- passes through the anchor x̄ (so x̄ remains feasible),
-- cuts off at least one vertex used to build it.
 """
 function add_extra_LE!(
     rng::AbstractRNG,
@@ -1227,6 +1179,369 @@ function add_extra_LE!(
     return H, h
 end
 
+"Random orthogonal matrix in R^{n×n}."
+function random_orthogonal(rng::AbstractRNG, n::Int)
+    R = randn(rng, n, n)
+    F = qr(R)
+    return Matrix(F.Q)
+end
+
+"""
+Collect k distinct vertices of {x : A x <= b, H x = h} via repeated LP solves.
+Anchor xbar is excluded from the vertex set (we keep it separate).
+
+Throws an error if not enough distinct vertices can be found.
+"""
+function collect_vertices_for_quad(
+    rng::AbstractRNG,
+    A::Matrix{Float64},
+    b::Vector{Float64},
+    H::Matrix{Float64},
+    h::Vector{Float64},
+    xbar::AbstractVector;
+    k_vertices::Int = 3,
+    max_tries_per_vertex::Int = 20,
+    tol::Real = 1e-6,
+    optimizer = MosekTools.Optimizer,
+)
+    verts = Vector{Vector{Float64}}()
+
+    while length(verts) < k_vertices
+        found = false
+        for _try in 1:max_tries_per_vertex
+            v, _ = find_vertex_lp(rng, A, b, H, h; optimizer = optimizer)
+
+            # distinct from anchor and existing vertices
+            if norm(v .- xbar, Inf) < tol
+                continue
+            end
+            if any(norm(v .- w, Inf) < tol for w in verts)
+                continue
+            end
+
+            push!(verts, v)
+            found = true
+            break
+        end
+
+        if !found
+            error("collect_vertices_for_quad: could not find enough distinct vertices.")
+        end
+    end
+
+    return verts
+end
+
+
+"""
+Build a quadratic inequality
+
+    g(x) = 0.5 x'Q x + q'x + r <= 0
+
+that cuts exactly one vertex from the given vertex set.
+
+Algorithm:
+  1. Sample Q and q with the requested number of negative eigenvalues (num_neg).
+  2. Evaluate phi(x) = 0.5 x'Q x + q'x at xbar and at all vertices.
+  3. Require that xbar is not the maximizer and that there is a positive gap
+     between the largest and second largest values.
+  4. Set r so that the unique maximizer vertex is cut (g > 0) and all others
+     (including xbar) are strictly feasible (g < 0).
+
+Returns (Q, q, r, cut_idx_local), where cut_idx_local is in 1:length(verts).
+"""
+function build_QI_cut_max_vertex(
+    rng::AbstractRNG,
+    xbar::AbstractVector,
+    verts::Vector{Vector{Float64}};
+    want_convex::Bool,
+    num_neg::Int,
+    nonneg_vals::UnitRange{Int} = 0:5,
+    neg_vals::UnitRange{Int}    = -5:-1,
+    qvals::UnitRange{Int}       = -5:5,
+    scale_Q::Real               = 1.0,
+    scale_q::Real               = 1.0,
+    gap_tol::Real               = 1e-4,
+    max_tries::Int              = 50,
+)
+    n = length(xbar)
+    k = length(verts)
+    @assert k ≥ 1 "build_QI_cut_max_vertex: need at least one vertex."
+    @assert 0 ≤ num_neg ≤ n "build_QI_cut_max_vertex: num_neg must be between 0 and n."
+
+    if want_convex
+        @assert num_neg == 0 "In convex mode, num_neg must be 0 for QI."
+    end
+
+    for attempt in 1:max_tries
+        # 1) Sample Q and q with given eigenpattern
+        Q_raw = rand_symm_from_eigs(
+            rng, n;
+            num_neg     = num_neg,
+            nonneg_vals = nonneg_vals,
+            neg_vals    = neg_vals,
+        )
+        Q = scale_Q .* Matrix{Float64}(Q_raw)
+        q = scale_q .* Float64.(rand_vec_int(rng, n; vals = qvals))
+
+        # 2) Evaluate phi(x) = 0.5 x'Qx + q'x on {xbar} ∪ verts
+        phi_xbar  = 0.5 * (xbar' * Q * xbar) + dot(q, xbar)
+        phi_verts = [0.5 * (v' * Q * v) + dot(q, v) for v in verts]
+
+        # all_vals[1] corresponds to xbar,
+        # all_vals[j+1] corresponds to verts[j]
+        all_vals   = vcat(phi_xbar, phi_verts)
+        idx_sorted = sortperm(all_vals; rev = true)
+
+        j1 = idx_sorted[1]  # index of maximum in all_vals
+        j2 = idx_sorted[2]  # index of second maximum
+
+        # xbar must NOT be the maximizer
+        if j1 == 1
+            continue
+        end
+
+        val1 = all_vals[j1]
+        val2 = all_vals[j2]
+
+        # Require a nontrivial gap
+        if val1 - val2 ≤ gap_tol
+            continue
+        end
+
+        # Threshold t = average of top two values
+        t = 0.5 * (val1 + val2)
+        r = -t
+
+        # Local index of cut vertex in `verts`
+        cut_idx_local = j1 - 1  # because all_vals[1] = xbar
+
+        return Matrix{Float64}(Q), Vector{Float64}(q), Float64(r), cut_idx_local
+    end
+
+    error("build_QI_cut_max_vertex: could not find suitable (Q, q) after $max_tries attempts.")
+end
+
+
+"""
+Build one quadratic equality
+
+    h(x) = 0.5 x'P x + p'x + s = 0
+
+from a *given* vertex set:
+
+- Anchor x̄ and all `eq_verts` satisfy h(x) = 0
+- `v_cut` is strictly on one side: h(v_cut) ≥ eps_cut or ≤ -eps_cut
+
+No eigenvalue pattern imposed on λ (P can be indefinite).
+"""
+function build_QE_from_vertex_set(
+    rng::AbstractRNG,
+    xbar::AbstractVector,
+    eq_verts::Vector{Vector{Float64}},
+    v_cut::Vector{Float64};
+    eps_cut::Real = 0.5,
+    coef_bound::Real = 5.0,
+    optimizer = MosekTools.Optimizer,
+)
+    n = length(xbar)
+    @assert length(v_cut) == n "v_cut must have length n"
+    for v in eq_verts
+        @assert length(v) == n "All equality vertices must have length n"
+    end
+
+    # Random orthogonal basis
+    Qmat = random_orthogonal(rng, n)
+
+    model = Model(optimizer)
+    @variable(model, lambda[1:n])
+    @variable(model, p[1:n])
+    @variable(model, s)
+
+    # Coefficient bounds
+    for i in 1:n
+        @constraint(model, -coef_bound <= lambda[i] <= coef_bound)
+        @constraint(model, -coef_bound <= p[i]      <= coef_bound)
+    end
+    @constraint(model, -coef_bound <= s <= coef_bound)
+
+    # Helper: add h(x) == 0 or ≤/≥ rhs
+    function add_qe_constraint!(x::AbstractVector, sense::Symbol, rhs::Real)
+        @assert length(x) == n
+        y = Qmat' * x
+        if sense === :eq
+            @constraint(model,
+                sum(0.5 * (y[i]^2) * lambda[i] for i in 1:n) +
+                sum(x[j] * p[j] for j in 1:n) + s == rhs
+            )
+        elseif sense === :le
+            @constraint(model,
+                sum(0.5 * (y[i]^2) * lambda[i] for i in 1:n) +
+                sum(x[j] * p[j] for j in 1:n) + s <= rhs
+            )
+        elseif sense === :ge
+            @constraint(model,
+                sum(0.5 * (y[i]^2) * lambda[i] for i in 1:n) +
+                sum(x[j] * p[j] for j in 1:n) + s >= rhs
+            )
+        else
+            error("Unsupported sense $sense in add_qe_constraint! (expected :eq, :le, :ge)")
+        end
+    end
+
+    # Equality points: anchor + eq_verts
+    add_qe_constraint!(xbar, :eq, 0.0)
+    for v in eq_verts
+        add_qe_constraint!(v, :eq, 0.0)
+    end
+
+    # Cut vertex: choose side randomly
+    if rand(rng) < 0.5
+        add_qe_constraint!(v_cut, :ge, eps_cut)
+    else
+        add_qe_constraint!(v_cut, :le, -eps_cut)
+    end
+
+    @objective(model, Min, 0.0)
+    optimize!(model)
+    status = termination_status(model)
+    @assert status == MOI.OPTIMAL "build_QE_from_vertex_set: LP not solved to OPTIMAL, status = $status"
+
+    λ_opt = value.(lambda)
+    p_opt = value.(p)
+    s_opt = value(s)
+
+    P = Qmat * Diagonal(λ_opt) * Qmat'
+    P = 0.5 * (P + P')   # symmetrize
+
+    return P, Vector{Float64}(p_opt), Float64(s_opt)
+end
+
+
+"""
+Build all quadratic inequalities and equalities from a precomputed vertex set,
+using a sequential cut-and-remove rule.
+
+Inputs:
+- rng, xbar
+- verts      : vector of K vertices in R^n; we require K = n_QI + n_QE.
+- n_QI, n_QE : number of quadratic inequalities / equalities
+- want_convex: global convexity flag (QE only allowed if false)
+- neg_QI     : length-n_QI vector; neg_QI[i] = number of negative eigenvalues in QI_i
+
+Rule:
+- Maintain an active index set A ⊆ {1,...,K}.
+- For each QI_i:
+    * consider the active vertices,
+    * build QI_i via build_QI_cut_max_vertex so that exactly one active vertex
+      (the maximizer of phi) is cut and all others (and xbar) are strictly feasible,
+    * remove that cut vertex from A.
+- For each QE_j:
+    * pick one remaining active vertex,
+    * build a QE that has h(xbar) = 0 and cuts that vertex on one side,
+    * remove that vertex from A.
+"""
+function build_quadratics_from_vertices(
+    rng::AbstractRNG,
+    xbar::AbstractVector,
+    verts::Vector{Vector{Float64}};
+    n_QI::Int,
+    n_QE::Int,
+    want_convex::Bool,
+    neg_QI::Vector{Int},
+    eps_feas::Real    = 0.5,   # kept for compatibility (not used by QI now)
+    eps_cut::Real     = 0.5,
+    eig_eps::Real     = 0.1,   # kept for compatibility (not used by QI now)
+    coef_bound::Real  = 5.0,
+    optimizer = MosekTools.Optimizer,
+)
+    K = length(verts)
+    @assert K == n_QI + n_QE "build_quadratics_from_vertices: expected n_QI + n_QE = $(n_QI + n_QE) vertices, got $K."
+    n = length(xbar)
+    for v in verts
+        @assert length(v) == n "All vertices in `verts` must have length n."
+    end
+
+    Qi_list = Matrix{Float64}[]
+    qi_list = Vector{Vector{Float64}}()
+    ri_list = Float64[]
+
+    Pi_list = Matrix{Float64}[]
+    pi_list = Vector{Vector{Float64}}()
+    si_list = Float64[]
+
+    # Active indices into `verts`, shrunk after each quadratic constraint
+    active = collect(1:K)
+
+    # ---- Quadratic inequalities: new max-vertex construction ----
+    if n_QI > 0
+        @assert length(neg_QI) == n_QI
+        for i in 1:n_QI
+            @assert !isempty(active) "No active vertices left for quadratic inequality $i."
+
+            # Current active vertices (coordinates)
+            verts_active = [verts[j] for j in active]
+
+            num_neg   = neg_QI[i]
+            qi_convex = (num_neg == 0)
+            if want_convex
+                @assert qi_convex "In convex mode, QI $i must be PSD (num_neg = 0)."
+            end
+
+            Q_i, q_i, r_i, cut_local = build_QI_cut_max_vertex(
+                rng,
+                xbar,
+                verts_active;
+                want_convex = qi_convex,
+                num_neg     = num_neg,
+                # you can expose further keyword args here if you want
+            )
+
+            push!(Qi_list, Q_i)
+            push!(qi_list, q_i)
+            push!(ri_list, r_i)
+
+            # Map local index back to global index and remove it from active set
+            cut_global = active[cut_local]
+            deleteat!(active, cut_local)
+        end
+    end
+
+    # ---- Quadratic equalities: keep old LP-based construction ----
+    if n_QE > 0
+        @assert !want_convex "Quadratic equalities are only allowed in nonconvex mode."
+        for j in 1:n_QE
+            @assert !isempty(active) "No active vertices left for quadratic equality $j."
+
+            # Seçilecek kesilecek vertex
+            cut_idx = active[1]
+            v_cut   = verts[cut_idx]
+
+            # Diğer aktif vertexler bu QE için h(x) = 0 sağlayacak
+            other_active = setdiff(active, [cut_idx])
+            eq_verts = [verts[k] for k in other_active]
+
+            P_j, p_j, s_j = build_QE_from_vertex_set(
+                rng, xbar, eq_verts, v_cut;
+                eps_cut    = eps_cut,
+                coef_bound = coef_bound,
+                optimizer  = optimizer,
+            )
+
+            push!(Pi_list, P_j)
+            push!(pi_list, p_j)
+            push!(si_list, s_j)
+
+            # Artık cut edilen vertex aktif değil, diğerleri kalıyor
+            active = other_active
+        end
+    end
+
+
+    return Qi_list, qi_list, ri_list, Pi_list, pi_list, si_list
+end
+
+
 # ============================
 # Spectral control for Q0 and QI
 # ============================
@@ -1234,17 +1549,6 @@ end
 """
 Build (neg_obj, neg_QI) from user-specified neg_eig_counts (or defaults),
 and check consistency with convex / nonconvex mode and dimension.
-
-Arguments:
-- n: dimension
-- n_QI: number of quadratic inequalities
-- n_QE: number of quadratic equalities
-- want_convex: convex mode flag
-- neg_eig_counts: optional vector (k0, k1, ..., k_{n_QI})
-
-Returns:
-- neg_obj::Int
-- neg_QI::Vector{Int} of length n_QI
 """
 function build_neg_eig_counts(
     n::Int,
@@ -1262,8 +1566,7 @@ function build_neg_eig_counts(
                 # introduce nonconvexity via the objective
                 return 1, fill(0, n_QI)
             else
-                # n = 1; we cannot have 1 ≤ k < n.
-                # Nonconvexity must then come from QE (if any).
+                # n = 1; nonconvexity must come from QE (if any).
                 if n_QE > 0
                     return 0, fill(0, n_QI)
                 else
@@ -1296,7 +1599,7 @@ function build_neg_eig_counts(
 end
 
 # ============================
-# Bounds (for Big-M): linear + convex quadratic ineq
+# Bounds (for Big-M)
 # ============================
 
 """
@@ -1304,7 +1607,7 @@ Compute coordinate-wise bounds (ell, u) of the linear region:
 
     P_lin := { x : A x <= b, H x = h }.
 
-Used when there are no convex quadratic inequalities.
+Used both for linear-only and for Big-M (quadratic constraints ignored).
 """
 function bounds_from_linear_part(
     A::AbstractMatrix{<:Real},
@@ -1358,14 +1661,9 @@ function bounds_from_linear_part(
 end
 
 """
-Compute coordinate-wise bounds (ell, u) of
+(Kept for completeness but no longer used in Big-M.)
 
-    P_cvx := { x : A x <= b, H x = h, g_j(x) <= 0 for j in convex_qi_indices },
-
-where each g_j(x) = 0.5 x'Q_j x + q_j'x + r_j is convex
-(Q_j is PSD, and here actually strongly convex because eigenvalues are ≥ 1).
-
-Nonconvex quadratic inequalities and all quadratic equalities are ignored here.
+Compute bounds including convex quadratic inequalities, if needed in future.
 """
 function bounds_with_convex_quadratics(
     A::AbstractMatrix{<:Real},
@@ -1399,7 +1697,6 @@ function bounds_with_convex_quadratics(
             @constraint(model, H * x .== h)
         end
 
-        # convex quadratic inequalities
         for j in convex_qi_indices
             Q = Qi_list[j]
             q = qi_list[j]
@@ -1449,12 +1746,10 @@ function bounds_with_convex_quadratics(
     return ell, u
 end
 
-
 """
 Clean bounds (ell, u) for nicer numerics, in a *safe* way for Big-M:
 
-- Round ell[i] *downwards* and u[i] *upwards* to the given number of digits.
-- No extra slack; we already go outward.
+- Round ell[i] downwards and u[i] upwards to the given number of digits.
 """
 function clean_bounds!(
     ell::AbstractVector,
@@ -1470,11 +1765,11 @@ function clean_bounds!(
             continue
         end
 
-        # outward rounding to `digits` decimals
+        # outward rounding
         ell[i] = floor(ell[i] * fac) / fac
         u[i]   = ceil( u[i] * fac) / fac
 
-        # tiny values → snap to exactly 0.0 for cosmetics
+        # tiny values → snap to exactly 0.0
         if abs(ell[i]) < 10.0^(-digits)
             ell[i] = 0.0
         end
@@ -1487,13 +1782,11 @@ function clean_bounds!(
 end
 
 """
-Compute bounds (ell, u) for Big-M:
+Compute bounds (ell, u) for Big-M using only the linear region
 
-- If there are no quadratic inequalities, or none of them is convex (neg_QI[j] > 0),
-  fall back to purely linear bounds.
+    { x : A x <= b, H x = h }.
 
-- Otherwise, include all convex quadratic inequalities (neg_QI[j] == 0)
-  when computing the bounds.
+Quadratic inequalities are deliberately ignored (supervisor's recommendation).
 """
 function bounds_for_bigM(
     A::AbstractMatrix{<:Real},
@@ -1506,23 +1799,60 @@ function bounds_for_bigM(
     neg_QI::Vector{Int};
     optimizer = MosekTools.Optimizer,
 )
-    if isempty(Qi_list)
-        return bounds_from_linear_part(A, b, H, h; optimizer = optimizer)
+    return bounds_from_linear_part(A, b, H, h; optimizer = optimizer)
+end
+
+# ============================
+# Final anchor feasibility check
+# ============================
+
+"""
+Sanity check: verify that the anchor x̄ is feasible for all constraints
+(up to a small tolerance).
+"""
+function check_anchor_feasible(
+    xbar::AbstractVector,
+    A::Matrix{Float64},
+    b::Vector{Float64},
+    H::Matrix{Float64},
+    h::Vector{Float64},
+    Qi_list::Vector{Matrix{Float64}},
+    qi_list::Vector{Vector{Float64}},
+    ri_list::Vector{Float64},
+    Pi_list::Vector{Matrix{Float64}},
+    pi_list::Vector{Vector{Float64}},
+    si_list::Vector{Float64};
+    tol::Real = 1e-6,
+)
+    # Linear inequalities: A x <= b
+    if size(A, 1) > 0 && !isempty(b)
+        viol = maximum(A * xbar .- b)
+        @assert viol <= tol "Anchor x̄ violates a linear inequality: max(Ax̄ - b) = $(viol)"
     end
 
-    convex_qi_indices = [j for j in 1:length(Qi_list) if neg_QI[j] == 0]
-
-    if isempty(convex_qi_indices)
-        # all quadratic inequalities are nonconvex → ignore them for bounds
-        return bounds_from_linear_part(A, b, H, h; optimizer = optimizer)
+    # Linear equalities: H x = h
+    if size(H, 1) > 0 && !isempty(h)
+        viol = maximum(abs.(H * xbar .- h))
+        @assert viol <= tol "Anchor x̄ violates a linear equality: max(|Hx̄ - h|) = $(viol)"
     end
 
-    return bounds_with_convex_quadratics(
-        A, b, H, h,
-        Qi_list, qi_list, ri_list,
-        convex_qi_indices;
-        optimizer = optimizer,
-    )
+    # Quadratic inequalities: g_i(x) <= 0
+    if !isempty(Qi_list)
+        for (Q, q, r) in zip(Qi_list, qi_list, ri_list)
+            val = 0.5 * dot(xbar, Q * xbar) + dot(q, xbar) + r
+            @assert val <= tol "Anchor x̄ violates a quadratic inequality: g(x̄) = $(val)"
+        end
+    end
+
+    # Quadratic equalities: h_j(x) = 0
+    if !isempty(Pi_list)
+        for (P, p, s) in zip(Pi_list, pi_list, si_list)
+            val = 0.5 * dot(xbar, P * xbar) + dot(p, xbar) + s
+            @assert abs(val) <= tol "Anchor x̄ violates a quadratic equality: h(x̄) = $(val)"
+        end
+    end
+
+    return nothing
 end
 
 # ============================
@@ -1533,26 +1863,6 @@ end
 generate_instance(...)
 
 Build a single QCQP instance according to a user specification.
-
-Keyword arguments:
-- n::Int: dimension (n ≥ 1)
-- rho::Int: cardinality bound for x (‖x‖₀ ≤ rho, with 0 ≤ rho ≤ n)
-- base_type::Symbol: geometry of the base bounded region; one of
-    :simplex, :box, :poly
-- n_LI::Int: number of additional linear inequalities (beyond the base region)
-- n_LE::Int: number of linear equalities
-- n_QI::Int: number of quadratic inequalities
-- n_QE::Int: number of quadratic equalities
-- want_convex::Bool: whether the continuous quadratic part should be convex
-- neg_eig_counts::Union{Nothing,Vector{Int}}:
-    optional vector (k0, k1, ..., k_{n_QI}) controlling negative eigenvalues
-    of Q0 and each QI
-- seed::Int: RNG seed
-- bigM_scale::Real: factor ≥ 1.0 used in Big-M computation
-- optimizer: JuMP optimizer type (default MosekTools.Optimizer)
-
-Returns:
-- inst::Dict{String,Any} holding all data matrices and metadata.
 """
 function generate_instance(;
     n::Int,
@@ -1604,25 +1914,19 @@ function generate_instance(;
     u   = zeros(Float64, n)
 
     if base_type == :simplex
-        A0, b0, H0, h0, ell0, u0 = build_simplex_bounds(n)
+        A0, b0, H0, h0 = build_simplex_bounds(n)
         A = vcat(A, A0)
         b = vcat(b, b0)
         H = vcat(H, H0)
         h = vcat(h, h0)
-        ell .= ell0
-        u   .= u0
     elseif base_type == :box
-        A0, b0, ell0, u0 = build_box_bounds(rng, xbar)
+        A0, b0 = build_box_bounds(rng, xbar)
         A = vcat(A, A0)
         b = vcat(b, b0)
-        ell .= ell0
-        u   .= u0
-    else
-        A0, b0, ell0, u0 = build_polytope_bounds(rng, xbar)
+    elseif base_type == :poly
+        A0, b0 = build_polytope_bounds(rng, xbar)
         A = vcat(A, A0)
         b = vcat(b, b0)
-        ell .= ell0
-        u   .= u0
     end
 
     # --- extra LE (first fix the affine subspace) ---
@@ -1644,47 +1948,58 @@ function generate_instance(;
         println()
     end
 
-    # --- quadratic inequalities (built before bounds) ---
-    Qi_list = Vector{Matrix{Float64}}()
+    # --- quadratic constraints from vertices (sequential cut/remove) ---
+    Qi_list = Matrix{Float64}[]
     qi_list = Vector{Vector{Float64}}()
     ri_list = Float64[]
 
-    if n_QI > 0
-        @assert length(neg_QI) == n_QI
-        for i in 1:n_QI
-            num_neg = neg_QI[i]
-            Q_i, q_i, r_i = make_qineq_with_eigs(rng, xbar; num_neg = num_neg,
-                                                 scale_Q = 1.0, scale_q = 1.0)
-            push!(Qi_list, Q_i)
-            push!(qi_list, q_i)
-            push!(ri_list, r_i)
-        end
+    Pi_list = Matrix{Float64}[]
+    pi_list = Vector{Vector{Float64}}()
+    si_list = Float64[]
+
+    k_quads = n_QI + n_QE
+    if k_quads > 0
+        verts_for_quads = collect_vertices_for_quad(
+            rng, A, b, H, h, xbar;
+            k_vertices = k_quads,
+            optimizer  = optimizer,
+        )
+
+        Qi_list, qi_list, ri_list, Pi_list, pi_list, si_list =
+            build_quadratics_from_vertices(
+                rng,
+                xbar,
+                verts_for_quads;
+                n_QI        = n_QI,
+                n_QE        = n_QE,
+                want_convex = want_convex,
+                neg_QI      = neg_QI,
+                eps_feas    = 0.5,
+                eps_cut     = 0.5,
+                eig_eps     = 0.1,
+                coef_bound  = 5.0,
+                optimizer   = optimizer,
+            )
     end
 
-    # --- quadratic equalities (nonconvex mode only) ---
-    Pi_list   = Vector{Matrix{Float64}}()
-    pi_list   = Vector{Vector{Float64}}()
-    si_list   = Float64[]
+    # --- final anchor feasibility sanity check (all constraints) ---
+    check_anchor_feasible(
+        xbar,
+        A, b,
+        H, h,
+        Qi_list, qi_list, ri_list,
+        Pi_list, pi_list, si_list;
+        tol = 1e-6,
+    )
 
-    if n_QE > 0
-        @assert !want_convex "Quadratic equalities are only allowed in nonconvex mode."
-        for _ in 1:n_QE
-            # we keep num_neg=0 here; QE is nonconvex anyway as a set
-            P_j, p_j, s_j = make_qeq_with_anchor(rng, xbar; num_neg = 0,
-                                                 scale_P = 1.0, scale_p = 1.0)
-            push!(Pi_list, P_j)
-            push!(pi_list, p_j)
-            push!(si_list, s_j)
-        end
-    end
-
-    # --- bounds for Big-M: linear + convex quadratic inequalities ---
-    ell, u = bounds_for_bigM(A, b, H, h, Qi_list, qi_list, ri_list, neg_QI; optimizer = optimizer)
+    # --- bounds for Big-M: linear only (quadratic ignored) ---
+    ell, u = bounds_for_bigM(A, b, H, h, Qi_list, qi_list, ri_list, neg_QI;
+                             optimizer = optimizer)
 
     # numeric cleaning: outward rounding for safe Big-M
     clean_bounds!(ell, u; digits = 4)
 
-    println("Final bounds (linear + convex quadratic inequalities) for Big-M (cleaned):")
+    println("Final bounds (linear only) for Big-M (cleaned):")
     println("  ell = ", ell)
     println("  u   = ", u)
 
@@ -1736,11 +2051,11 @@ function generate_instance(;
                base_type == :poly    ? "P" : ""
     inst["base_tag"] = base_tag
 
-    # convexity string (InstanceGen ile uyum)
+    # convexity string
     convexity = want_convex ? "CVX" : "NCVX"
     inst["convexity"] = convexity
 
-    # meta: kaç ekstra alsın
+    # meta counts
     inst["n_LI"] = n_LI
     inst["n_LE"] = n_LE
     inst["n_QI"] = n_QI
@@ -1753,7 +2068,6 @@ function generate_instance(;
     push!(parts, "rho$(rho)")
     base_tag != "" && push!(parts, base_tag)
 
-    # LI / LE / QI / QE - sayılı format
     if n_LI > 0
         push!(parts, "LI$(n_LI)")
     elseif size(A, 1) > 0
@@ -1798,17 +2112,13 @@ end
 end # module UserInstanceGen
 
 
-
-
-
-
-
-
-
-
+###############################
+# instances_build_script.jl
+###############################
 
 using .InstanceGen
 using .UserInstanceGen
+using Random
 
 # ------------------------------------------------
 # Special small rational box instance (EU ≠ IU)
@@ -1860,8 +2170,14 @@ function make_small_rational_instance()
     d["H"] = nothing
     d["h"] = nothing
 
-    # Box [-1,1]^4 → Big-M = 1 is enough
-    d["M"] = ones(Float64, n)
+    # Box [-1,1]^4 → bounds and Big-M
+    ell = fill(-1.0, n)
+    u   = fill( 1.0, n)
+    d["ell"] = ell
+    d["u"]   = u
+    d["M"]       = ones(Float64, n)
+    d["M_minus"] = ones(Float64, n)
+    d["M_plus"]  = ones(Float64, n)
 
     # Metadata so the rest of the pipeline understands it
     d["base_tag"]   = "B"        # box
@@ -1871,13 +2187,318 @@ function make_small_rational_instance()
     d["n_QI"]       = 0
     d["n_QE"]       = 0
     d["bigM_scale"] = 1.0
-    d["seed"]       = 0          # artificial seed, just a placeholder
+    d["seed"]       = 0          # artificial seed
 
     # Manual ID so it is easy to spot in plots / tables
     d["id"] = "n4_rho3_B_LI_NCVX_rational"
 
     return d
 end
+
+
+# ------------------------------------------------
+# Vertex–LP based test: 2 QI + 1 QE (sequential vertices)
+# base type P (polytope), n = 4, rho = 3
+# ------------------------------------------------
+function make_vertex_QI2_QE1_instance(; bigM_scale::Real = 1.0)
+    n   = 4
+    rho = 3
+    rng = Random.MersenneTwister(401)
+
+    # Anchor
+    xbar = UserInstanceGen.generate_sparse_anchor(rng, n, rho)
+
+    # Polytope base from LI only (positive spanning style) + 1 LE + 1 extra LI
+    A, b = UserInstanceGen.build_polytope_bounds(rng, xbar)
+    H = zeros(Float64, 0, n)
+    h = Float64[]
+
+    # One extra LE then one extra LI
+    H, h = UserInstanceGen.add_extra_LE!(rng, A, b, H, h, xbar, 1)
+    A, b = UserInstanceGen.add_extra_LI_vertex_cuts!(rng, A, b, H, h, xbar, 1)
+
+    # Total number of quadratic constraints
+    n_QI = 2
+    n_QE = 1
+    K_total = n_QI + n_QE
+
+    # Collect K_total distinct vertices of the linear polytope
+    verts = UserInstanceGen.collect_vertices_for_quad(
+        rng, A, b, H, h, xbar;
+        k_vertices = K_total,
+    )
+
+    # Active vertex indices, to be shrunk sequentially
+    active = collect(1:K_total)
+
+    Qi_list = Matrix{Float64}[]
+    qi_list = Vector{Vector{Float64}}()
+    ri_list = Float64[]
+
+    Pi_list = Matrix{Float64}[]
+    pi_list = Vector{Vector{Float64}}()
+    si_list = Float64[]
+
+    # ---- QI1: cuts v1 (indefinite: 1 negative eigenvalue) ----
+    cut_idx = active[1]                # deterministic: first active
+    v_cut   = verts[cut_idx]
+    feas_idx = setdiff(active, [cut_idx])
+    feas_verts = [verts[j] for j in feas_idx]
+
+    Q1, q1, r1 = UserInstanceGen.build_QI_from_vertex_set(
+        rng, xbar, feas_verts, v_cut;
+        want_convex = false,
+        num_neg     = 1,
+        eps_feas    = 0.5,
+        eps_cut     = 0.5,
+        coef_bound  = 5.0,
+    )
+    push!(Qi_list, Q1)
+    push!(qi_list, q1)
+    push!(ri_list, r1)
+
+    active = feas_idx   # remove v1
+
+    # ---- QI2: cuts one of the remaining vertices (PSD) ----
+    cut_idx = active[1]      # now this is "v2" in hikâyemiz
+    v_cut   = verts[cut_idx]
+    feas_idx = setdiff(active, [cut_idx])   # one vertex left
+    feas_verts = [verts[j] for j in feas_idx]
+
+    Q2, q2, r2 = UserInstanceGen.build_QI_from_vertex_set(
+        rng, xbar, feas_verts, v_cut;
+        want_convex = true,   # PSD
+        num_neg     = 0,
+        eps_feas    = 0.5,
+        eps_cut     = 0.5,
+        coef_bound  = 5.0,
+    )
+    push!(Qi_list, Q2)
+    push!(qi_list, q2)
+    push!(ri_list, r2)
+
+    active = feas_idx   # remove v2 → sadece bir vertex kaldı (v3)
+
+    # ---- QE1: cuts the last remaining vertex, only x̄ satisfies equality ----
+    @assert length(active) == 1
+    cut_idx = active[1]
+    v_cut   = verts[cut_idx]
+    eq_verts = Vector{Vector{Float64}}()   # no extra equality vertices besides x̄
+
+    P1, p1, s1 = UserInstanceGen.build_QE_from_vertex_set(
+        rng, xbar, eq_verts, v_cut;
+        eps_cut    = 0.5,
+        coef_bound = 5.0,
+    )
+    push!(Pi_list, P1)
+    push!(pi_list, p1)
+    push!(si_list, s1)
+
+    # Bounds from linear part only (for Big-M)
+    ell, u = UserInstanceGen.bounds_from_linear_part(A, b, H, h)
+    UserInstanceGen.clean_bounds!(ell, u; digits = 4)
+    M_common, M_minus, M_plus = UserInstanceGen.bigM_from_bounds(ell, u; scale = bigM_scale)
+
+    # Objective: 1 negative eigenvalue (additional nonconvexity)
+    rng_obj = Random.MersenneTwister(402)
+    Q0, q0 = UserInstanceGen.rand_objective(rng_obj, n; num_neg = 1)
+
+    # Anchor feasibility check (all constraints)
+    UserInstanceGen.check_anchor_feasible(
+        xbar,
+        A, b,
+        H, h,
+        Qi_list, qi_list, ri_list,
+        Pi_list, pi_list, si_list;
+        tol = 1e-6,
+    )
+
+    d = Dict{String,Any}()
+    d["n"]   = n
+    d["rho"] = rho
+
+    d["Q0"] = Q0
+    d["q0"] = q0
+
+    d["Qi"] = Tuple(Qi_list)
+    d["qi"] = Tuple(qi_list)
+    d["ri"] = ri_list
+
+    d["Pi"] = Tuple(Pi_list)
+    d["pi"] = Tuple(pi_list)
+    d["si"] = si_list
+
+    d["A"] = A
+    d["b"] = b
+    d["H"] = H
+    d["h"] = h
+
+    d["ell"]     = ell
+    d["u"]       = u
+    d["M"]       = M_common
+    d["M_minus"] = M_minus
+    d["M_plus"]  = M_plus
+
+    d["xbar"]        = xbar
+    d["base_type"]   = "P"
+    d["base_tag"]    = "P"
+    d["want_convex"] = false
+
+    # neg_eig_counts: [obj, QI1, QI2]
+    d["neg_eig_counts_input"] = [1, 1, 0]
+    d["neg_eig_counts_used"]  = [1, 1, 0]
+
+    d["seed"]       = 401
+    d["n_LI"]       = 1
+    d["n_LE"]       = 1
+    d["n_QI"]       = 2
+    d["n_QE"]       = 1
+    d["bigM_scale"] = bigM_scale
+
+    d["convexity"] = "NCVX"
+
+    d["id"] = "n4_rho3_P_LI1_LE1_QI2_QE1_NCVX_vertexLP_seq"
+
+    return d
+end
+
+# ------------------------------------------------
+# Vertex–LP based test: 4 QI (sequential vertices)
+# base type B (box), n = 4, rho = 3
+# ------------------------------------------------
+function make_vertex_QI4_instance(; bigM_scale::Real = 1.0)
+    n   = 4
+    rho = 3
+    rng = Random.MersenneTwister(501)
+
+    # Anchor
+    xbar = UserInstanceGen.generate_sparse_anchor(rng, n, rho)
+
+    # Box base around anchor + 2 extra LI (vertex cuts)
+    A, b = UserInstanceGen.build_box_bounds(rng, xbar)
+    H = zeros(Float64, 0, n)
+    h = Float64[]
+
+    A, b = UserInstanceGen.add_extra_LI_vertex_cuts!(rng, A, b, H, h, xbar, 2)
+
+    # Only QI constraints
+    n_QI = 4
+    n_QE = 0
+    K_total = n_QI
+
+    # Collect K_total distinct vertices of the linear polytope
+    verts = UserInstanceGen.collect_vertices_for_quad(
+        rng, A, b, H, h, xbar;
+        k_vertices = K_total,
+    )
+
+    active = collect(1:K_total)
+
+    Qi_list = Matrix{Float64}[]
+    qi_list = Vector{Vector{Float64}}()
+    ri_list = Float64[]
+
+    Pi_list = Matrix{Float64}[]
+    pi_list = Vector{Vector{Float64}}()
+    si_list = Float64[]
+
+    # Eigenpatterns: two indefinite (1 negative eigenvalue), then two PSD
+    neg_pattern = [1, 1, 0, 0]
+
+    for k in 1:n_QI
+        @assert !isempty(active) "No active vertices left for QI $k"
+        cut_idx = active[1]              # deterministik seçim
+        v_cut   = verts[cut_idx]
+        feas_idx = setdiff(active, [cut_idx])
+        feas_verts = [verts[j] for j in feas_idx]
+
+        want_convex = (neg_pattern[k] == 0)
+        num_neg     = neg_pattern[k]
+
+        Qk, qk, rk = UserInstanceGen.build_QI_from_vertex_set(
+            rng, xbar, feas_verts, v_cut;
+            want_convex = want_convex,
+            num_neg     = num_neg,
+            eps_feas    = 0.5,
+            eps_cut     = 0.5,
+            coef_bound  = 5.0,
+        )
+
+        push!(Qi_list, Qk)
+        push!(qi_list, qk)
+        push!(ri_list, rk)
+
+        active = feas_idx   # cut edilen vertexi setten çıkar
+    end
+
+    # Bounds from linear part only
+    ell, u = UserInstanceGen.bounds_from_linear_part(A, b, H, h)
+    UserInstanceGen.clean_bounds!(ell, u; digits = 4)
+    M_common, M_minus, M_plus = UserInstanceGen.bigM_from_bounds(ell, u; scale = bigM_scale)
+
+    # Objective: PSD (nonconvexity only from QI's)
+    rng_obj = Random.MersenneTwister(502)
+    Q0, q0 = UserInstanceGen.rand_objective(rng_obj, n; num_neg = 0)
+
+    # Anchor feasibility check
+    UserInstanceGen.check_anchor_feasible(
+        xbar,
+        A, b,
+        H, h,
+        Qi_list, qi_list, ri_list,
+        Pi_list, pi_list, si_list;
+        tol = 1e-6,
+    )
+
+    d = Dict{String,Any}()
+    d["n"]   = n
+    d["rho"] = rho
+
+    d["Q0"] = Q0
+    d["q0"] = q0
+
+    d["Qi"] = Tuple(Qi_list)
+    d["qi"] = Tuple(qi_list)
+    d["ri"] = ri_list
+
+    d["Pi"] = nothing
+    d["pi"] = nothing
+    d["si"] = nothing
+
+    d["A"] = A
+    d["b"] = b
+    d["H"] = H
+    d["h"] = h
+
+    d["ell"]     = ell
+    d["u"]       = u
+    d["M"]       = M_common
+    d["M_minus"] = M_minus
+    d["M_plus"]  = M_plus
+
+    d["xbar"]        = xbar
+    d["base_type"]   = "B"
+    d["base_tag"]    = "B"
+    d["want_convex"] = false    # overall NCVX due to QI's
+
+    # neg_eig_counts: [obj, QI1, QI2, QI3, QI4]
+    d["neg_eig_counts_input"] = [0; neg_pattern]
+    d["neg_eig_counts_used"]  = [0; neg_pattern]
+
+    d["seed"]       = 501
+    d["n_LI"]       = 2
+    d["n_LE"]       = 0
+    d["n_QI"]       = n_QI
+    d["n_QE"]       = 0
+    d["bigM_scale"] = bigM_scale
+
+    d["convexity"] = "NCVX"
+
+    d["id"] = "n4_rho3_B_LI2_QI4_NCVX_vertexLP_seq"
+
+    return d
+end
+
 
 function build_all_instances(; bigM_scale::Real = 1.0)
     # 0) Special rational box instance with EU ≠ IU at plain RLT
@@ -2062,7 +2683,7 @@ function build_all_instances(; bigM_scale::Real = 1.0)
         )
     )
 
-    # 2.11 Polytope, n=15, mixed: LI + LE + 2 QI + 1 QE
+    # 2.11  Polytope, n=15, mixed: LI + LE + 2 QI + 1 QE
     push!(insts,
         UserInstanceGen.generate_instance(
             n = 15,
@@ -2079,15 +2700,22 @@ function build_all_instances(; bigM_scale::Real = 1.0)
         )
     )
 
-    @assert length(insts) == 21 "We expect exactly 21 instances."
+    # 2.12  Vertex–LP test: P base, 2 QI + 1 QE (sequential vertices)
+    push!(insts, make_vertex_QI2_QE1_instance(bigM_scale = bigM_scale))
+
+    # 2.13  Vertex–LP test: B base, 4 QI (sequential vertices)
+    push!(insts, make_vertex_QI4_instance(bigM_scale = bigM_scale))
+
+    @assert length(insts) == 23 "We expect exactly 23 instances."
 
     return insts
 end
 
+
 # --- Build & save ---
 
 insts = build_all_instances(; bigM_scale = 1.0)
-@assert length(insts) == 21  # sanity check
+@assert length(insts) == 23  # sanity check
 
 instances_path = joinpath(@__DIR__, "instances.json")
 InstanceGen.save_instances_json(instances_path, insts)

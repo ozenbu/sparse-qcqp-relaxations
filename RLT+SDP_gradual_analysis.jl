@@ -239,7 +239,7 @@ module PlotGradualSDP
 
 using CSV, DataFrames, Plots
 using Measures: mm
-import Main.RLT_SDP_Batch: gap_pct  # tek tanım orada
+import Main.RLT_SDP_Batch: gap_pct  
 
 const RelaxationOrder = [
     "RLT",
@@ -252,13 +252,13 @@ const RelaxationOrder = [
     "RLT_SOC2x2_full_U",
     "RLT_SOC2x2_full_XU",
 
-    "RLT_SOC3x3_X",
-    "RLT_SOC3x3_U",
-    "RLT_SOC3x3_XU",
+    "RLT_SOC_directional_X",
+    "RLT_SOC_directional_U",
+    "RLT_SOC_directional_XU",
 
-    "RLT_SOC2x2_3x3_X",
-    "RLT_SOC2x2_3x3_U",
-    "RLT_SOC2x2_3x3_XU",
+    "RLT_SOC_hybrid_X",
+    "RLT_SOC_hybrid_U",
+    "RLT_SOC_hybrid_XU",
 
     "RLT_PSD3x3_X",
     "RLT_PSD3x3_U",
@@ -270,6 +270,8 @@ const RelaxationOrder = [
 
     "RLT_full_SDP",
 ]
+
+
 
 function load_results(path::AbstractString)
     CSV.read(path, DataFrame)
@@ -294,8 +296,8 @@ function plot_instance(df::DataFrame, inst_id::Int; outdir::AbstractString = "pl
         return nothing
     end
 
-    # Artık RelaxationOrder'a göre sort ETMİYORUZ.
-    # Onun yerine EU gap'e göre sıralayacağız.
+    
+    # Sorting w.r.t. EU gap
 
     k     = nrow(sub)
     modes = copy(sub.mode_str)
@@ -322,7 +324,7 @@ function plot_instance(df::DataFrame, inst_id::Int; outdir::AbstractString = "pl
         times[idx] = t
     end
 
-    # --- EU gap'e göre büyükten küçüğe sıralama ---
+    # Sorting from largest to smallest EU gap
     sort_key = similar(EU_gap)
     for i in 1:k
         g = EU_gap[i]
@@ -340,10 +342,10 @@ function plot_instance(df::DataFrame, inst_id::Int; outdir::AbstractString = "pl
     n   = sub.n[1]
     rho = sub.rho[1]
 
-    # başlıkta string id’yi göster (örn: n7_rho4_S_LI_LE_CVX_seed1)
+    # string id for the title (e.g.: n7_rho4_S_LI_LE_CVX_seed1)
     label = hasproperty(sub, :inst_label) ? sub.inst_label[1] : "inst_$(inst_id)"
 
-    # 1. y-ekseni: gap (%)
+    # 1. y-axis: gap (%)
     p = plot(
         x, EU_gap;
         xlabel    = "Relaxation mode",
@@ -366,7 +368,7 @@ function plot_instance(df::DataFrame, inst_id::Int; outdir::AbstractString = "pl
         color     = :maroon,
     )
 
-    # 2. y-ekseni: time (s) – dynamic y-limits
+    # 2. y-axis: time (s) – dynamic y-limits
     finite_times = filter(!isnan, times)
     tmax = isempty(finite_times) ? 1.0 : maximum(finite_times)
     ymax = 1.05 * tmax
@@ -410,7 +412,7 @@ if isinteractive()
     using MosekTools
     using Gurobi
 
-    #=
+    
     # 2) Run all relaxations on all instances
     batch = RLT_SDP_Batch.run_batch(
         "instances.json";
@@ -423,7 +425,7 @@ if isinteractive()
     )
 
     println(batch)
-    =#
+    
 
     # 3) Plot all instances (gap vs mode, time on right axis)
     PlotGradualSDP.plot_all_instances("gradual_sdp_results.csv"; outdir = "plots")

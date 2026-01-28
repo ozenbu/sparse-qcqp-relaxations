@@ -21,13 +21,13 @@ const RelaxationModes = (
     :RLT_SOC2x2_full_U,
     :RLT_SOC2x2_full_XU,
 
-    :RLT_SOC3x3_X,
-    :RLT_SOC3x3_U,
-    :RLT_SOC3x3_XU,
+    :RLT_SOC_directional_X,
+    :RLT_SOC_directional_U,
+    :RLT_SOC_directional_XU,
 
-    :RLT_SOC2x2_3x3_X,
-    :RLT_SOC2x2_3x3_U,
-    :RLT_SOC2x2_3x3_XU,
+    :RLT_SOC_hybrid_X,
+    :RLT_SOC_hybrid_U,
+    :RLT_SOC_hybrid_XU,
 
     :RLT_PSD3x3_X,
     :RLT_PSD3x3_U,
@@ -39,8 +39,6 @@ const RelaxationModes = (
 
     :RLT_full_SDP,
 )
-
-
 
 all_pairs(n::Int) = [(i,j) for i in 1:n for j in i+1:n]
 
@@ -64,14 +62,15 @@ function add_SOC2x2_diag_U!(model::Model, u, U)
     return nothing
 end
 
-add_SOC2x2_diag_XU!(m, x, X, u, U) = (
-    add_SOC2x2_diag_X!(m, x, X);
+add_SOC2x2_diag_XU!(m, x, X, u, U) = begin
+    add_SOC2x2_diag_X!(m, x, X)
     add_SOC2x2_diag_U!(m, u, U)
-)
+    nothing
+end
 
 # ------------------------------------------------------------------
-# 2) full 2×2 SOC: diag + all 2×2 minors
-#    Xii Xjj ≥ Xij²  via RSOC; same for U
+# 2) full 2×2 SOC: diagonal + all 2×2 minors
+#    Xii Xjj ≥ Xij² via RSOC; same for U
 # ------------------------------------------------------------------
 function add_SOC2x2_full_X!(model::Model, x, X)
     n = length(x)
@@ -95,16 +94,17 @@ function add_SOC2x2_full_U!(model::Model, u, U)
     return nothing
 end
 
-add_SOC2x2_full_XU!(m, x, X, u, U) = (
-    add_SOC2x2_full_X!(m, x, X);
+add_SOC2x2_full_XU!(m, x, X, u, U) = begin
+    add_SOC2x2_full_X!(m, x, X)
     add_SOC2x2_full_U!(m, u, U)
-)
+    nothing
+end
 
 # ------------------------------------------------------------------
-# 3) Directional SOC: d'Z d ≥ (z'd)^2
-#    Core directional part (only d = e_i ± e_j, no diagonals here)
+# 3) directional SOC: d'Z d ≥ (z'd)^2 for d = e_i ± e_j
+#    "core" directional constraints, without diagonals
 # ------------------------------------------------------------------
-function add_SOC3x3_dir_X!(model::Model, x, X)
+function add_SOC_directional_core_X!(model::Model, x, X)
     n = length(x)
     for i in 1:n, j in i+1:n
         # d = e_i + e_j
@@ -124,7 +124,7 @@ function add_SOC3x3_dir_X!(model::Model, x, X)
     return nothing
 end
 
-function add_SOC3x3_dir_U!(model::Model, u, U)
+function add_SOC_directional_core_U!(model::Model, u, U)
     n = length(u)
     for i in 1:n, j in i+1:n
         # d = e_i + e_j
@@ -144,44 +144,45 @@ function add_SOC3x3_dir_U!(model::Model, u, U)
     return nothing
 end
 
-# "Pure" SOC-3×3 family: diagonals (d = e_i) + directional (d = e_i ± e_j)
-function add_SOC3x3_X!(model::Model, x, X)
-    add_SOC2x2_diag_X!(model, x, X)  # d = e_i
-    add_SOC3x3_dir_X!(model, x, X)   # d = e_i ± e_j
+# directional family = diagonals (d = e_i) + directional_core (d = e_i ± e_j)
+function add_SOC_directional_X!(model::Model, x, X)
+    add_SOC2x2_diag_X!(model, x, X)
+    add_SOC_directional_core_X!(model, x, X)
     return nothing
 end
 
-function add_SOC3x3_U!(model::Model, u, U)
-    add_SOC2x2_diag_U!(model, u, U)  # d = e_i
-    add_SOC3x3_dir_U!(model, u, U)   # d = e_i ± e_j
+function add_SOC_directional_U!(model::Model, u, U)
+    add_SOC2x2_diag_U!(model, u, U)
+    add_SOC_directional_core_U!(model, u, U)
     return nothing
 end
 
-add_SOC3x3_XU!(m, x, X, u, U) = (
-    add_SOC3x3_X!(m, x, X);
-    add_SOC3x3_U!(m, u, U)
-)
+add_SOC_directional_XU!(m, x, X, u, U) = begin
+    add_SOC_directional_X!(m, x, X)
+    add_SOC_directional_U!(m, u, U)
+    nothing
+end
 
 # ------------------------------------------------------------------
-# 3b) Combined SOC-2×2-full + SOC-3×3 directional
-#     (avoid duplicating diagonal SOC constraints)
+# 3b) hybrid SOC = 2×2 full + directional_core (no duplicate diagonals)
 # ------------------------------------------------------------------
-function add_SOC2x2_3x3_X!(model::Model, x, X)
-    add_SOC2x2_full_X!(model, x, X)  # diag + 2×2 minors
-    add_SOC3x3_dir_X!(model, x, X)   # only d = e_i ± e_j
+function add_SOC_hybrid_X!(model::Model, x, X)
+    add_SOC2x2_full_X!(model, x, X)          # diag + all 2×2 minors
+    add_SOC_directional_core_X!(model, x, X) # d = e_i ± e_j
     return nothing
 end
 
-function add_SOC2x2_3x3_U!(model::Model, u, U)
-    add_SOC2x2_full_U!(model, u, U)  # diag + 2×2 minors
-    add_SOC3x3_dir_U!(model, u, U)   # only d = e_i ± e_j
+function add_SOC_hybrid_U!(model::Model, u, U)
+    add_SOC2x2_full_U!(model, u, U)
+    add_SOC_directional_core_U!(model, u, U)
     return nothing
 end
 
-add_SOC2x2_3x3_XU!(m, x, X, u, U) = (
-    add_SOC2x2_3x3_X!(m, x, X);
-    add_SOC2x2_3x3_U!(m, u, U)
-)
+add_SOC_hybrid_XU!(m, x, X, u, U) = begin
+    add_SOC_hybrid_X!(m, x, X)
+    add_SOC_hybrid_U!(m, u, U)
+    nothing
+end
 
 # ------------------------------------------------------------------
 # 4) PSD 3×3 principals of [1 x'; x X] and [1 u'; u U]
@@ -210,10 +211,11 @@ function add_PSD3x3_U!(model::Model, u, U)
     return nothing
 end
 
-add_PSD3x3_XU!(m, x, X, u, U) = (
-    add_PSD3x3_X!(m, x, X);
+add_PSD3x3_XU!(m, x, X, u, U) = begin
+    add_PSD3x3_X!(m, x, X)
     add_PSD3x3_U!(m, u, U)
-)
+    nothing
+end
 
 # ------------------------------------------------------------------
 # 5) block SDP constraints: [1  x'; x  X]  and  [1  u'; u  U]
@@ -232,10 +234,11 @@ function add_blockSDP_U!(model::Model, u, U)
     return nothing
 end
 
-add_blockSDP_XU!(m, x, X, u, U) = (
-    add_blockSDP_X!(m, x, X);
+add_blockSDP_XU!(m, x, X, u, U) = begin
+    add_blockSDP_X!(m, x, X)
     add_blockSDP_U!(m, u, U)
-)
+    nothing
+end
 
 # ------------------------------------------------------------------
 # Build and solve
@@ -265,6 +268,7 @@ function build_RLT_SDP_model(
         sum(q0[i]*x[i] for i=1:n)
     )
 
+    # base RLT blocks
     add_FC!(m, x, u, X, R, U, params)
 
     if startswith(variant, "E")
@@ -282,8 +286,9 @@ function build_RLT_SDP_model(
         end
     end
 
+    # gradual strengthening on top of RLT
     if relaxation == :RLT
-        # pure RLT, no extra lift
+        # pure RLT
 
     # ---- SOC 2x2 diag ----
     elseif relaxation == :RLT_SOC2x2_diag_X
@@ -301,21 +306,21 @@ function build_RLT_SDP_model(
     elseif relaxation == :RLT_SOC2x2_full_XU
         add_SOC2x2_full_XU!(m, x, X, u, U)
 
-    # ---- SOC 3x3 (directional) ----
-    elseif relaxation == :RLT_SOC3x3_X
-        add_SOC3x3_X!(m, x, X)
-    elseif relaxation == :RLT_SOC3x3_U
-        add_SOC3x3_U!(m, u, U)
-    elseif relaxation == :RLT_SOC3x3_XU
-        add_SOC3x3_XU!(m, x, X, u, U)
+    # ---- SOC directional (diag + directional_core) ----
+    elseif relaxation == :RLT_SOC_directional_X
+        add_SOC_directional_X!(m, x, X)
+    elseif relaxation == :RLT_SOC_directional_U
+        add_SOC_directional_U!(m, u, U)
+    elseif relaxation == :RLT_SOC_directional_XU
+        add_SOC_directional_XU!(m, x, X, u, U)
 
-    # ---- SOC 2x2 + 3x3 (combined) ----
-    elseif relaxation == :RLT_SOC2x2_3x3_X
-        add_SOC2x2_3x3_X!(m, x, X)
-    elseif relaxation == :RLT_SOC2x2_3x3_U
-        add_SOC2x2_3x3_U!(m, u, U)
-    elseif relaxation == :RLT_SOC2x2_3x3_XU
-        add_SOC2x2_3x3_XU!(m, x, X, u, U)
+    # ---- SOC hybrid = 2x2 full + directional_core ----
+    elseif relaxation == :RLT_SOC_hybrid_X
+        add_SOC_hybrid_X!(m, x, X)
+    elseif relaxation == :RLT_SOC_hybrid_U
+        add_SOC_hybrid_U!(m, u, U)
+    elseif relaxation == :RLT_SOC_hybrid_XU
+        add_SOC_hybrid_XU!(m, x, X, u, U)
 
     # ---- PSD 3x3 ----
     elseif relaxation == :RLT_PSD3x3_X
@@ -364,7 +369,7 @@ function solve_RLT_SDP(
     )
     st = termination_status(m)
 
-    if st == MOI.OPTIMAL || st == MOI.LOCALLY_SOLVED || st == MOI.ALMOST_OPTIMAL
+    if st in (MOI.OPTIMAL, MOI.LOCALLY_SOLVED, MOI.ALMOST_OPTIMAL)
         x = value.(m[:x])
         u = value.(m[:u])
         X = value.(m[:X])

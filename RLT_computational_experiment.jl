@@ -1,14 +1,12 @@
 using JSON
 using JuMP, MosekTools
-using Combinatorics          # for combinations
 using LinearAlgebra
-using Main.RLTBigM           # RLTBigM.build_and_solve, prepare_instance, add_FC!, add_FE!, add_FU!
+using Main.RLTBigM
 using Main.RLT_SDP_Batch: normalize_instance!
+
 const MOI = JuMP.MOI
 
-# ----------------------------------------------------------------------
-# Helper: pretty-print matrices with rounding
-# ----------------------------------------------------------------------
+# rounded matrix printing
 function print_matrix_rounded(name::AbstractString, M; digits::Int = 4)
     println("\n", name, " (rounded to ", digits, " digits) =")
     Mround = round.(M; digits = digits)
@@ -16,228 +14,139 @@ function print_matrix_rounded(name::AbstractString, M; digits::Int = 4)
     println()
 end
 
-# ----------------------------------------------------------------------
-# Build all 0–1 support vectors v^S with |S| = rho
-# ----------------------------------------------------------------------
-function all_support_vectors(n::Int, rho::Int)
-    vs = Vector{Vector{Float64}}()
-    for S in combinations(1:n, rho)
-        v = zeros(Float64, n)
-        v[S] .= 1.0
-        push!(vs, v)
+# ---------------------------------------------------------
+# add the correct RLT blocks depending on variant
+#
+# EU: FC, FE, FU
+# IU: FC, FI, FU, FIU
+# ---------------------------------------------------------
+function add_relaxation_blocks!(
+    m::Model,
+    relaxation_variant::String,
+    x,
+    u,
+    X,
+    R,
+    U,
+    params,
+)
+    if relaxation_variant == "EU"
+        RLTBigM.add_FC!(m, x, u, X, R, U, params)
+        RLTBigM.add_FE!(m, x, u, X, R, U, params)
+        RLTBigM.add_FU!(m, x, u, X, R, U, params)
+    elseif relaxation_variant == "IU"
+        RLTBigM.add_FC!(m, x, u, X, R, U, params)
+        RLTBigM.add_FI!(m, x, u, X, R, U, params)
+        RLTBigM.add_FU!(m, x, u, X, R, U, params)
+        RLTBigM.add_FIU!(m, x, u, X, R, U, params)
+    else
+        error("Unknown relaxation_variant = $relaxation_variant. Use \"EU\" or \"IU\".")
     end
-    return vs
 end
 
-# ----------------------------------------------------------------------
-# Feasibility model with x*, X*, u* fixed
+# ---------------------------------------------------------
+# U Block-SDP "closest point" model
 #
-# Modes:
-#   mode = :S_psd
-#       - variables: R, U, S (S is PSD matrix)
-#       - constraint: U = u*u' + S
+# Variables: x, u, X, R, U, W, δ
 #
-#   mode = :lambda
-#       - variables: R, U, λ
-#       - constraints: λ ≥ 0, sum(λ) = 1,
-#                      U = Σ_s λ_s v^s (v^s)'
+# Constraints:
+#   - Full RLT blocks (EU or IU) in (x,u,X,R,U).
+#   - Block SDP:
+#         W = [ 1    u'  ;
+#               u    U   ]  and  W ⪰ 0.
+#   - Distance to base solution:
+#         |x - x*|_∞ ≤ δ,
+#         |u - u*|_∞ ≤ δ,
+#         |X - X*|_∞ ≤ δ.
 #
-# In both modes:
-#   - FC, FE, FU are added using fixed x*, u*, X* as data.
-#   - If enforce_R_xu = true, we impose |R - x*u'| ≤ tol elementwise.
-# ----------------------------------------------------------------------
-function build_feas_model(
+# Objective: min δ.
+#
+# If infeasible, there is no point satisfying RLT + U block SDP.
+# If feasible, δ* measures how far we must move from (x*,u*,X*) to hit the RLT ∩ blockSDP set.
+# ---------------------------------------------------------
+function build_blockSDP_closest_model(
+    relaxation_variant::String,
     data::Dict{String,Any},
-    x_fix::Vector{Float64},
-    u_fix::Vector{Float64},
-    X_fix::Matrix{Float64};
-    mode::Symbol = :S_psd,        # :S_psd or :lambda
-    enforce_R_xu::Bool = false,
-    tol::Float64 = 1e-6,
+    x_star::Vector{Float64},
+    u_star::Vector{Float64},
+    X_star::Matrix{Float64},
 )
     params = RLTBigM.prepare_instance(data)
     n = params.n
-    ρ = params.ρ
 
     m = Model(MosekTools.Optimizer)
     set_silent(m)
 
-    # Variables (only R, U; x, u, X are fixed numerically)
+    # RLT variables
+    @variable(m, x[1:n])
+    @variable(m, u[1:n])
+    @variable(m, X[1:n,1:n], Symmetric)
     @variable(m, R[1:n,1:n])
     @variable(m, U[1:n,1:n], Symmetric)
 
-    # Original RLT blocks, using fixed x,u,X as numeric data
-    RLTBigM.add_FC!(m, x_fix, u_fix, X_fix, R, U, params)
-    RLTBigM.add_FE!(m, x_fix, u_fix, X_fix, R, U, params)
-    RLTBigM.add_FU!(m, x_fix, u_fix, X_fix, R, U, params)
 
-    if mode == :S_psd
-        # U = u*u' + S, with S PSD
-        @variable(m, S[1:n,1:n], PSD)
-        uuT = u_fix * transpose(u_fix)   # constant matrix
-        @constraint(m, U .== uuT .+ S)
+    # RLT blocks (EU or IU)
+    add_relaxation_blocks!(m, relaxation_variant, x, u, X, R, U, params)
+    
+    """
+    # 2) directly adding as a constraint
+    @variable(m, Y[1:n+1,1:n+1], Symmetric)
+    @constraint(m, Y .== [1.0  u'
+                          u    U] )
+    @constraint(m, Y in PSDCone())
+    
+    """               
+    @constraint(m, [1.0  u'
+                    u    U] in PSDCone())
+    
 
-    elseif mode == :lambda
-        # Lambda representation: all v^S with |S| = ρ
-        vs = all_support_vectors(n, Int(round(ρ)))
-        S_count = length(vs)
+    # To linearize min max
+    @variable(m, δ >= 0)
 
-        @variable(m, λ[1:S_count] >= 0)
-        @constraint(m, sum(λ) == 1)
+    # |x - x*| <= δ  (componentwise)
+    @constraint(m, x .- x_star .<=  δ)
+    @constraint(m, x_star .- x .<= δ)
 
-        # U = Σ_s λ_s v^s (v^s)'
-        for i in 1:n, j in 1:n
-            @constraint(m, U[i,j] == sum(λ[s] * vs[s][i] * vs[s][j] for s in 1:S_count))
-        end
-    else
-        error("Unknown mode = $mode. Use :S_psd or :lambda.")
-    end
+    # |u - u*| <= δ
+    #@constraint(m, u .- u_star .<=  δ)
+    #@constraint(m, u_star .- u .<= δ)
 
-    if enforce_R_xu
-        # Target outer product R_target = x* u*'
-        R_target = x_fix * transpose(u_fix)
-        # Impose |R - R_target| ≤ tol elementwise
-        @constraint(m, R .<= R_target .+ tol)
-        @constraint(m, R .>= R_target .- tol)
-    end
+    # |X - X*| <= δ  (entrywise)
+    @constraint(m, X .- X_star .<=  δ)
+    @constraint(m, X_star .- X .<= δ)
 
-    @objective(m, Min, 0.0)   # pure feasibility
+    @objective(m, Min, δ)
 
     return m
 end
 
-# ----------------------------------------------------------------------
-# Driver: load instances, pick one, solve EU, then test feasibility
-# under a chosen U-structure and optional R ≈ x*u'
-# ----------------------------------------------------------------------
-
-# Load and normalize all instances
-raw = JSON.parsefile("instances.json")
-insts = [normalize_instance!(deepcopy(d)) for d in raw]
-
-println("Total number of instances: ", length(insts))
-
-# Choose which instance and which mode to test
-instance_index = 13          # change this index if you want a different instance
-mode          = :lambda         # choose :S_psd or :lambda
-enforce_R_xu  = false          # set true if you want |R - x*u'| ≤ tol
-
-data = insts[instance_index]
-println("Selected instance index = ", instance_index,
-        ", id = ", get(data, "id", "unknown"))
-
-# Solve EU to get x*, u*, X*, R*, U*
-res_EU = RLTBigM.build_and_solve(data; variant="EU")
-status_EU = res_EU[1]
-@assert status_EU == :OPTIMAL "EU variant is not optimal"
-
-_, obj_EU, x_star, u_star, X_star, R_star, U_star = res_EU
-println("EU objective = ", obj_EU)
-
-println("\n=== x_star (rounded to 4 digits) ===")
-println(round.(x_star; digits=4))
-
-println("\n=== u_star (rounded to 4 digits) ===")
-println(round.(u_star; digits=4))
-
-println("\n=== X_star (rounded to 4 digits) ===")
-show(stdout, "text/plain", round.(X_star; digits=4))
-println()
-
-# Build feasibility model with x*, X*, u* fixed and selected mode
-m_feas = build_feas_model(
-    data,
-    x_star,
-    u_star,
-    X_star;
-    mode = mode,
-    enforce_R_xu = enforce_R_xu,
-    tol = 1e-6,
-)
-
-optimize!(m_feas)
-
-feas_status = termination_status(m_feas)
-println("feasibility model status = ", feas_status)
-
-if feas_status in (MOI.OPTIMAL, MOI.FEASIBLE_POINT)
-    U_new = value.(m_feas[:U])
-    R_new = value.(m_feas[:R])
-
-    # Differences
-    diffU     = maximum(abs.(U_new .- U_star))
-    diffR     = maximum(abs.(R_new .- R_star))
-    R_xu      = x_star * transpose(u_star)
-    diffR_xu  = maximum(abs.(R_new .- R_xu))
-
-    println("==== U comparison ====")
-    println("max |U_new - U_star| = ", round(diffU; digits = 8))
-    print_matrix_rounded("U_star (from EU)", U_star; digits = 4)
-    print_matrix_rounded("U_new (from feas model)", U_new; digits = 4)
-
-    println("\n==== R comparison ====")
-    println("max |R_new - R_star| = ", round(diffR; digits = 8))
-    println("max |R_new - x*u'|   = ", round(diffR_xu; digits = 8))
-    print_matrix_rounded("R_star (from EU)", R_star; digits = 4)
-    print_matrix_rounded("R_new (from feas model)", R_new; digits = 4)
-    print_matrix_rounded("R_xu = x_star * u_star'", R_xu; digits = 4)
-
-    if mode == :S_psd
-        S_new = value.(m_feas[:S])
-        print_matrix_rounded("S_new (U - u*u')", S_new; digits = 4)
-    end
-
-    if mode == :lambda
-        λ_new = value.(m_feas[:λ])
-        println("\nλ_new (first 20 entries, rounded to 4 digits) = ",
-                round.(λ_new[1:min(end,20)]; digits = 4))
-    end
-end
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ----------------------------------------------------------------------
-# Main driver: run S_psd test on ALL instances
+# ---------------------------------------------------------
+# Driver: run block-SDP test on all instances
 #
 # For each instance:
-#   1) Solve EU to get (x*, u*, X*, R*, U*)
-#   2) Build feasibility model with mode = :S_psd
-#   3) Check if there exists S PSD s.t. U = u*u' + S under all EU constraints
-# ----------------------------------------------------------------------
-function run_S_psd_all(; enforce_R_xu::Bool = false, tol::Float64 = 1e-6)
-    # Load and normalize all instances
+#   1) Solve base relaxation (EU or IU) to get (x*,u*,X*,R*,U*).
+#   2) Build block-SDP "closest point" model.
+#   3) Solve and classify:
+#        - OPTIMAL / FEASIBLE_POINT -> "feasible" (RLT ∩ blockSDP nonempty)
+#        - INFEASIBLE / INFEASIBLE_OR_UNBOUNDED -> "infeasible"
+#        - anything else -> "unknown / numerically problematic"
+#
+# Also prints δ*, and the actual max deviations in x,u,X.
+# ---------------------------------------------------------
+function run_blockSDP_tests(
+    relaxation_variant::String;
+    print_details::Bool = true,
+)
     raw = JSON.parsefile("instances.json")
     insts = [normalize_instance!(deepcopy(d)) for d in raw]
 
-    println("Total number of instances: ", length(insts))
+    println("Total number of instances   : ", length(insts))
+    println("Base relaxation variant     : ", relaxation_variant)
+    println("Test                        : block-SDP closest point")
 
     feasible_count = 0
     infeasible_count = 0
+    unknown_count = 0
     skipped_count = 0
 
     for (idx, data) in enumerate(insts)
@@ -246,70 +155,105 @@ function run_S_psd_all(; enforce_R_xu::Bool = false, tol::Float64 = 1e-6)
         println("Instance index = $idx, id = $id")
         println("==============================")
 
-        # Solve EU to get x*, u*, X*, R*, U*
-        res_EU = RLTBigM.build_and_solve(data; variant = "EU")
-        status_EU = res_EU[1]
-        println("EU status = ", status_EU)
+        # 1) Solve base EU/IU relaxation
+        res_base = RLTBigM.build_and_solve(data; variant = relaxation_variant)
+        status_base = res_base[1]
+        println("Base relaxation status = ", status_base)
 
-        if status_EU != :OPTIMAL
-            println("Skipping S_psd test because EU is not OPTIMAL.")
+        if status_base != :OPTIMAL
+            println("Skipping test: base relaxation is not OPTIMAL.")
             skipped_count += 1
             continue
         end
 
-        _, obj_EU, x_star, u_star, X_star, R_star, U_star = res_EU
-        println("EU objective = ", obj_EU)
+        _, obj_base, x_star, u_star, X_star, R_star, U_star = res_base
+        println("Base objective = ", obj_base)
 
-        # Build S_psd feasibility model
-        m_feas = build_feas_model(
+        # 2) Build and solve block-SDP closest model
+        m_feas = build_blockSDP_closest_model(
+            relaxation_variant,
             data,
             x_star,
             u_star,
-            X_star;
-            mode = :S_psd,
-            enforce_R_xu = enforce_R_xu,
-            tol = tol,
+            X_star,
         )
         optimize!(m_feas)
 
-        feas_status = termination_status(m_feas)
-        println("S_psd feasibility model status = ", feas_status)
+        s = termination_status(m_feas)
+        println("Block-SDP test status = ", s)
 
-        if feas_status in (MOI.OPTIMAL, MOI.FEASIBLE_POINT)
+        # 3) Classification
+        if s in (MOI.OPTIMAL, MOI.FEASIBLE_POINT)
             feasible_count += 1
 
-            U_new = value.(m_feas[:U])
-            R_new = value.(m_feas[:R])
-            S_new = value.(m_feas[:S])
+            if print_details
+                δ_star = value(m_feas[:δ])
 
-            # Differences (for diagnostics)
-            diffU     = maximum(abs.(U_new .- U_star))
-            diffR     = maximum(abs.(R_new .- R_star))
-            R_xu      = x_star * transpose(u_star)
-            diffR_xu  = maximum(abs.(R_new .- R_xu))
+                x_new = value.(m_feas[:x])
+                u_new = value.(m_feas[:u])
+                X_new = value.(m_feas[:X])
+                U_new = value.(m_feas[:U])
+                R_new = value.(m_feas[:R])
 
-            println("  max |U_new - U_star| = ", round(diffU; digits = 8))
-            println("  max |R_new - R_star| = ", round(diffR; digits = 8))
-            println("  max |R_new - x*u'|   = ", round(diffR_xu; digits = 8))
+                diffx = maximum(abs.(x_new .- x_star))
+                diffu = maximum(abs.(u_new .- u_star))
+                diffX = maximum(abs.(X_new .- X_star))
+                diffU = maximum(abs.(U_new .- U_star))
+                diffR = maximum(abs.(R_new .- R_star))
 
-            # Optional: check smallest eigenvalue of S_new
-            ev = eigvals(Symmetric(S_new))
-            println("  min eigenvalue(S_new) = ", round(minimum(ev); digits = 8))
-        else
+                println("  δ* (objective)          = ", round(δ_star; digits = 6))
+                println("  max |x_new - x_star|    = ", round(diffx;   digits = 6))
+                println("  max |u_new - u_star|    = ", round(diffu;   digits = 6))
+                println("  max |X_new - X_star|    = ", round(diffX;   digits = 6))
+                println("  max |U_new - U_star|    = ", round(diffU;   digits = 6))
+                println("  max |R_new - R_star|    = ", round(diffR;   digits = 6))
+
+                # Optional: check eigenvalues of the block matrix W
+                # W_val = value.(m_feas[:W])
+                # lam_min_W = minimum(eigvals(Symmetric(W_val)))
+                # println("  min eigenvalue(W)       = ", round(lam_min_W; digits = 8))
+            end
+
+        elseif s in (MOI.INFEASIBLE, MOI.INFEASIBLE_OR_UNBOUNDED)
             infeasible_count += 1
+        else
+            unknown_count += 1
+            println("  -> classified as UNKNOWN / numerically problematic.")
         end
     end
 
-    println("\n========== S_psd SUMMARY ==========")
-    println("Feasible S_psd-model instances   : ", feasible_count)
-    println("Infeasible S_psd-model instances : ", infeasible_count)
-    println("Skipped (EU not OPTIMAL)         : ", skipped_count)
-    println("Total                            : ", length(insts))
-    println("==================================")
+    println("\n========== block-SDP TEST SUMMARY ==========")
+    println("Relaxation variant           : ", relaxation_variant)
+    println("Feasible instances           : ", feasible_count)
+    println("Infeasible instances         : ", infeasible_count)
+    println("Unknown / numerical issues   : ", unknown_count)
+    println("Skipped (base not OPTIMAL)   : ", skipped_count)
+    println("Total                        : ", length(insts))
+    println("============================================")
 end
 
-# Run the driver
-run_S_psd_all()
+# Example calls:
+run_blockSDP_tests("EU")
+# run_blockSDP_tests("IU")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
